@@ -6,9 +6,11 @@ st.set_page_config(
     page_title="Richard's Retirement Paycheck",
     page_icon="💵",
     layout="wide"
+)
+
 st.markdown("## 📊 Portfolio Summary")
 
-st.markdown(""")
+st.markdown("""
 **Invested:** $295,090  
 **Gain:** +$4,150  
 """)

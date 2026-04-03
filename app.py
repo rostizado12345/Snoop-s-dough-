@@ -32,7 +32,7 @@ df = pd.DataFrame(data)
 # CALCULATIONS (AUTO)
 # -----------------------------
 total_invested = 295090
-current_value = int(df["Value"].sum())
+current_value = 299240
 total_gain = current_value - total_invested
 gain_pct = (total_gain / total_invested) * 100
 

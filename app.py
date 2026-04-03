@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+import json
+from pathlib import Path
 
 st.set_page_config(
     page_title="Richard's Retirement Paycheck",
@@ -7,15 +9,10 @@ st.set_page_config(
     layout="wide"
 )
 
-# =========================================================
-# 🔧 UPDATE HERE ONLY
-# Change ONLY the Shares numbers after new buys.
-# Do not touch anything else.
-# =========================================================
-
 TOTAL_INVESTED = 295090.00
+DATA_FILE = Path("holdings_data.json")
 
-holdings = [
+DEFAULT_HOLDINGS = [
     {"Symbol": "AIPI",  "Shares": 433.250,   "FallbackPrice": 34.21, "AnnualYield": 0.22, "Week": "Week 2", "Est_Day": 12},
     {"Symbol": "CHPY",  "Shares": 315.648,   "FallbackPrice": 55.93, "AnnualYield": 0.18, "Week": "Week 2", "Est_Day": 13},
     {"Symbol": "DIVO",  "Shares": 857.354,   "FallbackPrice": 45.00, "AnnualYield": 0.05, "Week": "Week 3", "Est_Day": 15},
@@ -32,10 +29,20 @@ holdings = [
     {"Symbol": "TLTW",  "Shares": 918.594,   "FallbackPrice": 22.52, "AnnualYield": 0.15, "Week": "Week 4", "Est_Day": 22},
 ]
 
-# =========================================================
-# AUTO PRICE PULL
-# Uses Yahoo Finance first. If Yahoo fails, uses FallbackPrice.
-# =========================================================
+def load_holdings():
+    if DATA_FILE.exists():
+        try:
+            with open(DATA_FILE, "r") as f:
+                data = json.load(f)
+            if isinstance(data, list) and data:
+                return data
+        except Exception:
+            pass
+    return DEFAULT_HOLDINGS.copy()
+
+def save_holdings(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
 @st.cache_data(ttl=900)
 def get_live_prices(symbols):
@@ -47,9 +54,11 @@ def get_live_prices(symbols):
             try:
                 ticker = yf.Ticker(symbol)
                 hist = ticker.history(period="5d", auto_adjust=False)
+
                 if hist is not None and not hist.empty:
-                    last_close = float(hist["Close"].dropna().iloc[-1])
-                    prev_close = float(hist["Close"].dropna().iloc[-2]) if len(hist["Close"].dropna()) >= 2 else last_close
+                    closes = hist["Close"].dropna()
+                    last_close = float(closes.iloc[-1])
+                    prev_close = float(closes.iloc[-2]) if len(closes) >= 2 else last_close
                     prices[symbol] = {
                         "last": last_close,
                         "prev_close": prev_close,
@@ -59,17 +68,64 @@ def get_live_prices(symbols):
                     prices[symbol] = None
             except Exception:
                 prices[symbol] = None
+
     except Exception:
         for symbol in symbols:
             prices[symbol] = None
 
     return prices
 
-df = pd.DataFrame(holdings)
-symbols = df["Symbol"].tolist()
-live_prices = get_live_prices(symbols)
+if "holdings_data" not in st.session_state:
+    st.session_state.holdings_data = load_holdings()
 
-# Fill prices, using fallback if Yahoo unavailable
+st.title("Richard’s Retirement Paycheck")
+st.caption("Auto prices from Yahoo Finance when available. Edit mode stays off unless you turn it on.")
+
+edit_mode = st.toggle("✏️ Edit Holdings", value=False)
+
+if edit_mode:
+    st.warning("Editing mode is ON. Change Shares only, then click Save Changes.")
+
+    edit_df = pd.DataFrame(st.session_state.holdings_data)[["Symbol", "Shares"]]
+
+    edited_df = st.data_editor(
+        edit_df,
+        hide_index=True,
+        use_container_width=True,
+        disabled=["Symbol"],
+        column_config={
+            "Symbol": st.column_config.TextColumn("Symbol"),
+            "Shares": st.column_config.NumberColumn("Shares", format="%.3f", step=0.001),
+        },
+        key="holdings_editor",
+    )
+
+    col_save, col_cancel = st.columns(2)
+
+    with col_save:
+        if st.button("💾 Save Changes", use_container_width=True):
+            updated = []
+            existing = {item["Symbol"]: item for item in st.session_state.holdings_data}
+
+            for _, row in edited_df.iterrows():
+                symbol = row["Symbol"]
+                item = existing[symbol].copy()
+                item["Shares"] = float(row["Shares"])
+                updated.append(item)
+
+            st.session_state.holdings_data = updated
+            save_holdings(updated)
+            st.cache_data.clear()
+            st.success("Holdings saved.")
+
+    with col_cancel:
+        if st.button("Cancel", use_container_width=True):
+            st.session_state.holdings_data = load_holdings()
+            st.rerun()
+
+df = pd.DataFrame(st.session_state.holdings_data)
+live_prices = get_live_prices(df["Symbol"].tolist())
+
 last_prices = []
 prev_closes = []
 sources = []
@@ -96,13 +152,9 @@ df["Last"] = last_prices
 df["PrevClose"] = prev_closes
 df["Price Source"] = sources
 
-# =========================================================
-# AUTO CALCULATIONS
-# =========================================================
-
 df["Value"] = df["Shares"] * df["Last"]
 df["Day Change $"] = df["Shares"] * (df["Last"] - df["PrevClose"])
-df["Day Change %"] = ((df["Last"] - df["PrevClose"]) / df["PrevClose"]).fillna(0) * 100
+df["Day Change %"] = (((df["Last"] - df["PrevClose"]) / df["PrevClose"]).fillna(0)) * 100
 
 current_value = df["Value"].sum()
 total_gain = current_value - TOTAL_INVESTED
@@ -113,6 +165,7 @@ df["Monthly Income"] = (df["Value"] * df["AnnualYield"]) / 12.0
 
 expected_monthly_income = df["Monthly Income"].sum()
 weekly_estimate = expected_monthly_income / 4.0
+
 income_goal = 8000.0
 income_gap = income_goal - expected_monthly_income
 income_progress = min(expected_monthly_income / income_goal, 1.0) if income_goal else 0
@@ -132,13 +185,6 @@ week_order = {"Week 1": 1, "Week 2": 2, "Week 3": 3, "Week 4": 4}
 schedule["sort"] = schedule["Week"].map(week_order)
 schedule = schedule.sort_values(["sort", "Est_Day"]).drop(columns="sort")
 
-# =========================================================
-# DISPLAY
-# =========================================================
-
-st.title("Richard’s Retirement Paycheck")
-st.caption("Auto prices from Yahoo Finance when available. If Yahoo is unavailable, the app uses the screenshot fallback prices.")
-
 price_source_note = "Yahoo live prices" if (df["Price Source"] == "Yahoo").any() else "Fallback prices from your Fidelity screenshots"
 st.info(f"Price source right now: {price_source_note}")
 
@@ -153,7 +199,15 @@ with col3:
     st.metric("💰 Total Gain", f"${total_gain:,.0f}", f"{gain_pct:.2f}%")
 
 st.markdown("## 💵 Income Snapshot")
-st.metric("Expected Monthly Income", f"${expected_monthly_income:,.0f}")
+
+inc1, inc2, inc3 = st.columns(3)
+with inc1:
+    st.metric("Conservative", f"${df['Conservative'].sum():,.0f}")
+with inc2:
+    st.metric("Expected", f"${expected_monthly_income:,.0f}")
+with inc3:
+    st.metric("Aggressive", f"${df['Aggressive'].sum():,.0f}")
+
 st.progress(income_progress)
 st.caption(f"Goal: ${income_goal:,.0f} • Gap: ${income_gap:,.0f}")
 st.metric("Weekly Income Estimate", f"${weekly_estimate:,.0f}")

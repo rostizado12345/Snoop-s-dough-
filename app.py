@@ -32,6 +32,31 @@ st.markdown("""
 .kpi-value { color: white; font-size: 1.5rem; font-weight: 700; }
 .section-title { font-size: 1.2rem; font-weight: 800; margin-top: 0.4rem; margin-bottom: 0.6rem; }
 .small-note { color: #9ca3af; font-size: 0.9rem; }
+.calendar-card {
+    background: #111827;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 16px;
+    padding: 14px 16px;
+    min-height: 170px;
+    margin-bottom: 12px;
+}
+.calendar-week {
+    color: #93c5fd;
+    font-size: 0.9rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+}
+.calendar-pay {
+    color: white;
+    font-size: 1.7rem;
+    font-weight: 800;
+    margin-bottom: 10px;
+}
+.calendar-items {
+    color: #d1d5db;
+    font-size: 0.92rem;
+    line-height: 1.45;
+}
 div[data-testid="stDataFrame"] * { font-size: 16px !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -61,7 +86,6 @@ df["Yield"] = pd.to_numeric(df["Yield"], errors="coerce").fillna(0)
 # -------------------------
 df["Value"] = df["Shares"] * df["Price"]
 
-# realistic scaling
 df["Annual_Optimistic"] = df["Value"] * df["Yield"]
 df["Annual_Expected"] = df["Annual_Optimistic"] * 0.90
 df["Annual_Conservative"] = df["Annual_Optimistic"] * 0.75
@@ -76,76 +100,47 @@ con = df["Monthly_Conservative"].sum()
 total_value = df["Value"].sum()
 
 # -------------------------
-# ESTIMATED PAY TIMING
-# this is a starter timing map you can tweak later
+# ESTIMATED PAY TIMING MAP
+# tweak later if needed
 # -------------------------
-pay_window_map = {
-    "GDXY": "Early",
-    "QQQI": "Late",
-    "SPYI": "Late",
-    "DIVO": "Mid",
-    "FEPI": "Late",
-    "AIPI": "Mid",
-    "SVOL": "Late",
-    "IYRI": "Mid",
-    "IWMI": "Mid",
-    "MLPI": "Mid",
-    "IAU": "None",
-    "TLTW": "Late",
-}
-
 pay_day_map = {
     "GDXY": 5,
-    "QQQI": 24,
-    "SPYI": 26,
+    "CHPY": 8,
+    "AIPI": 12,
     "DIVO": 15,
-    "FEPI": 27,
-    "AIPI": 14,
-    "SVOL": 25,
     "IYRI": 16,
     "IWMI": 17,
     "MLPI": 18,
-    "IAU": None,
-    "TLTW": 23,
+    "TLTW": 22,
+    "QQQI": 24,
+    "SVOL": 25,
+    "SPYI": 26,
+    "FEPI": 27,
+    "IAU": None
 }
 
-df["Pay_Window"] = df["Ticker"].map(pay_window_map).fillna("Mid")
 df["Pay_Day"] = df["Ticker"].map(pay_day_map)
 
-# monthly schedule buckets
-schedule = (
-    df.groupby("Pay_Window", dropna=False)["Monthly_Expected"]
-      .sum()
-      .reindex(["Early", "Mid", "Late", "None"], fill_value=0)
-      .reset_index()
-)
-schedule.columns = ["Window", "Expected Monthly Income"]
+def week_bucket(day):
+    if pd.isna(day):
+        return "No Payout"
+    day = int(day)
+    if day <= 7:
+        return "Week 1"
+    elif day <= 14:
+        return "Week 2"
+    elif day <= 21:
+        return "Week 3"
+    else:
+        return "Week 4"
 
-# cleaner detail
-income_view = df[[
-    "Ticker", "Value", "Monthly_Conservative", "Monthly_Expected",
-    "Monthly_Optimistic", "Pay_Window", "Pay_Day"
-]].copy()
-
-income_view = income_view.sort_values("Monthly_Expected", ascending=False)
-
-total_row = pd.DataFrame([{
-    "Ticker": "TOTAL",
-    "Value": df["Value"].sum(),
-    "Monthly_Conservative": con,
-    "Monthly_Expected": exp,
-    "Monthly_Optimistic": opt,
-    "Pay_Window": "",
-    "Pay_Day": ""
-}])
-
-income_view = pd.concat([income_view, total_row], ignore_index=True)
+df["Pay_Week"] = df["Pay_Day"].apply(week_bucket)
 
 # -------------------------
 # HEADER
 # -------------------------
 st.title("Richard’s Retirement Paycheck")
-st.markdown("<div class='sub'>Now with estimated payout timing.</div>", unsafe_allow_html=True)
+st.markdown("<div class='sub'>Real paycheck calendar view with estimated weekly deposit timing.</div>", unsafe_allow_html=True)
 
 st.markdown(f"""
 <div class="card">
@@ -162,7 +157,7 @@ st.markdown(f"""
 st.progress(min(exp / GOAL, 1.0), text=f"Monthly income progress toward {money(GOAL)}")
 
 # -------------------------
-# KPI ROW
+# KPI ROWS
 # -------------------------
 c1, c2, c3 = st.columns(3)
 
@@ -217,52 +212,106 @@ with k3:
     """, unsafe_allow_html=True)
 
 # -------------------------
-# MAIN SECTIONS
+# PAYCHECK CALENDAR
 # -------------------------
-left, right = st.columns([1.35, 1])
+st.markdown('<div class="section-title">Monthly Paycheck Calendar</div>', unsafe_allow_html=True)
 
-with left:
-    st.markdown('<div class="section-title">Your Income Engine</div>', unsafe_allow_html=True)
-    st.dataframe(
-        income_view,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Ticker": st.column_config.TextColumn("Holding"),
-            "Value": st.column_config.NumberColumn("Value", format="$%0.0f"),
-            "Monthly_Conservative": st.column_config.NumberColumn("Conservative", format="$%0.0f"),
-            "Monthly_Expected": st.column_config.NumberColumn("Expected", format="$%0.0f"),
-            "Monthly_Optimistic": st.column_config.NumberColumn("Optimistic", format="$%0.0f"),
-            "Pay_Window": st.column_config.TextColumn("Pay Window"),
-            "Pay_Day": st.column_config.NumberColumn("Est. Day"),
-        },
-    )
+week_order = ["Week 1", "Week 2", "Week 3", "Week 4"]
 
-with right:
-    st.markdown('<div class="section-title">Estimated Payout Timing</div>', unsafe_allow_html=True)
+week_summary = (
+    df[df["Pay_Week"] != "No Payout"]
+    .groupby("Pay_Week")["Monthly_Expected"]
+    .sum()
+    .reindex(week_order, fill_value=0)
+)
 
-    chart = alt.Chart(schedule).mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6).encode(
-        x=alt.X("Window:N", sort=["Early", "Mid", "Late", "None"], title=""),
-        y=alt.Y("Expected Monthly Income:Q", title="Expected Income"),
-        tooltip=[
-            alt.Tooltip("Window:N"),
-            alt.Tooltip("Expected Monthly Income:Q", format=",.0f")
-        ]
-    ).properties(height=320)
+week_holdings = {}
+for wk in week_order:
+    temp = df[df["Pay_Week"] == wk].sort_values("Pay_Day")
+    items = []
+    for _, row in temp.iterrows():
+        items.append(f'{row["Ticker"]} · day {int(row["Pay_Day"])} · {money(row["Monthly_Expected"])}')
+    week_holdings[wk] = items
 
-    st.altair_chart(chart, use_container_width=True)
-    st.markdown(
-        "<div class='small-note'>This is an estimated timing map. We can fine-tune individual funds later if you want exacter payout windows.</div>",
-        unsafe_allow_html=True
-    )
+w1, w2, w3, w4 = st.columns(4)
+
+for col, wk in zip([w1, w2, w3, w4], week_order):
+    items_html = "<br>".join(week_holdings[wk]) if week_holdings[wk] else "No estimated payouts"
+    col.markdown(f"""
+    <div class="calendar-card">
+        <div class="calendar-week">{wk}</div>
+        <div class="calendar-pay">{money(week_summary[wk])}</div>
+        <div class="calendar-items">{items_html}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
 # -------------------------
-# UPCOMING LIST
+# WEEKLY CHART
 # -------------------------
-st.markdown('<div class="section-title">Estimated Monthly Pay Schedule</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">Weekly Income Flow</div>', unsafe_allow_html=True)
 
-schedule_list = df[["Ticker", "Pay_Window", "Pay_Day", "Monthly_Expected"]].copy()
-schedule_list = schedule_list[schedule_list["Pay_Window"] != "None"].sort_values(["Pay_Day", "Ticker"])
+weekly_chart_df = pd.DataFrame({
+    "Week": week_order,
+    "Expected Income": [week_summary[w] for w in week_order]
+})
+
+weekly_chart = alt.Chart(weekly_chart_df).mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6).encode(
+    x=alt.X("Week:N", sort=week_order, title=""),
+    y=alt.Y("Expected Income:Q", title="Expected Income"),
+    tooltip=[
+        alt.Tooltip("Week:N"),
+        alt.Tooltip("Expected Income:Q", format=",.0f")
+    ]
+).properties(height=280)
+
+st.altair_chart(weekly_chart, use_container_width=True)
+
+# -------------------------
+# HOLDINGS TABLE
+# -------------------------
+st.markdown('<div class="section-title">Your Income Engine</div>', unsafe_allow_html=True)
+
+income_view = df[[
+    "Ticker", "Value", "Monthly_Conservative", "Monthly_Expected",
+    "Monthly_Optimistic", "Pay_Week", "Pay_Day"
+]].copy()
+
+income_view = income_view.sort_values(["Pay_Day", "Ticker"], na_position="last")
+
+total_row = pd.DataFrame([{
+    "Ticker": "TOTAL",
+    "Value": df["Value"].sum(),
+    "Monthly_Conservative": con,
+    "Monthly_Expected": exp,
+    "Monthly_Optimistic": opt,
+    "Pay_Week": "",
+    "Pay_Day": ""
+}])
+
+income_view = pd.concat([income_view, total_row], ignore_index=True)
+
+st.dataframe(
+    income_view,
+    use_container_width=True,
+    hide_index=True,
+    column_config={
+        "Ticker": st.column_config.TextColumn("Holding"),
+        "Value": st.column_config.NumberColumn("Value", format="$%0.0f"),
+        "Monthly_Conservative": st.column_config.NumberColumn("Conservative", format="$%0.0f"),
+        "Monthly_Expected": st.column_config.NumberColumn("Expected", format="$%0.0f"),
+        "Monthly_Optimistic": st.column_config.NumberColumn("Optimistic", format="$%0.0f"),
+        "Pay_Week": st.column_config.TextColumn("Pay Week"),
+        "Pay_Day": st.column_config.NumberColumn("Est. Day"),
+    },
+)
+
+# -------------------------
+# DEPOSIT SCHEDULE TABLE
+# -------------------------
+st.markdown('<div class="section-title">Estimated Deposit Schedule</div>', unsafe_allow_html=True)
+
+schedule_list = df[["Ticker", "Pay_Week", "Pay_Day", "Monthly_Expected"]].copy()
+schedule_list = schedule_list[schedule_list["Pay_Week"] != "No Payout"].sort_values(["Pay_Day", "Ticker"])
 
 st.dataframe(
     schedule_list,
@@ -270,8 +319,13 @@ st.dataframe(
     hide_index=True,
     column_config={
         "Ticker": st.column_config.TextColumn("Holding"),
-        "Pay_Window": st.column_config.TextColumn("Window"),
+        "Pay_Week": st.column_config.TextColumn("Week"),
         "Pay_Day": st.column_config.NumberColumn("Est. Day"),
-        "Monthly_Expected": st.column_config.NumberColumn("Expected Monthly Pay", format="$%0.0f"),
+        "Monthly_Expected": st.column_config.NumberColumn("Expected Deposit", format="$%0.0f"),
     },
+)
+
+st.markdown(
+    "<div class='small-note'>This is a paycheck-style estimate, not exact brokerage payment dates. We can fine-tune fund-by-fund later.</div>",
+    unsafe_allow_html=True
 )

@@ -65,6 +65,7 @@ def money(x):
     return f"${float(x):,.0f}"
 
 GOAL = 8000
+CASH_BUFFER = 18000  # change this later if your FDRXX changes
 
 # -------------------------
 # LOAD CSV
@@ -100,8 +101,15 @@ con = df["Monthly_Conservative"].sum()
 total_value = df["Value"].sum()
 
 # -------------------------
+# NEW UPGRADE 1: CASH BUFFER COVER
+# -------------------------
+goal_weekly_need = GOAL / 4
+expected_weekly_income = exp / 4
+income_gap_per_week = max(goal_weekly_need - expected_weekly_income, 0)
+weeks_of_gap_covered = CASH_BUFFER / income_gap_per_week if income_gap_per_week > 0 else 999
+
+# -------------------------
 # ESTIMATED PAY TIMING MAP
-# tweak later if needed
 # -------------------------
 pay_day_map = {
     "GDXY": 5,
@@ -135,6 +143,11 @@ def week_bucket(day):
         return "Week 4"
 
 df["Pay_Week"] = df["Pay_Day"].apply(week_bucket)
+
+# -------------------------
+# NEW UPGRADE 2: INCOME % BY ETF
+# -------------------------
+df["Income_Share_%"] = (df["Monthly_Expected"] / exp * 100).fillna(0)
 
 # -------------------------
 # HEADER
@@ -212,6 +225,38 @@ with k3:
     """, unsafe_allow_html=True)
 
 # -------------------------
+# NEW SECTION: CASH BUFFER COVER
+# -------------------------
+st.markdown('<div class="section-title">Cash Buffer Cover</div>', unsafe_allow_html=True)
+
+b1, b2, b3 = st.columns(3)
+
+with b1:
+    st.markdown(f"""
+    <div class="kpi">
+        <div class="kpi-label">Cash Buffer</div>
+        <div class="kpi-value">{money(CASH_BUFFER)}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with b2:
+    st.markdown(f"""
+    <div class="kpi">
+        <div class="kpi-label">Weekly Goal Gap</div>
+        <div class="kpi-value">{money(income_gap_per_week)}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with b3:
+    weeks_text = f"{weeks_of_gap_covered:.1f} weeks" if weeks_of_gap_covered != 999 else "Fully covered"
+    st.markdown(f"""
+    <div class="kpi">
+        <div class="kpi-label">Cash Covers</div>
+        <div class="kpi-value">{weeks_text}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# -------------------------
 # PAYCHECK CALENDAR
 # -------------------------
 st.markdown('<div class="section-title">Monthly Paycheck Calendar</div>', unsafe_allow_html=True)
@@ -273,7 +318,7 @@ st.markdown('<div class="section-title">Your Income Engine</div>', unsafe_allow_
 
 income_view = df[[
     "Ticker", "Value", "Monthly_Conservative", "Monthly_Expected",
-    "Monthly_Optimistic", "Pay_Week", "Pay_Day"
+    "Monthly_Optimistic", "Income_Share_%", "Pay_Week", "Pay_Day"
 ]].copy()
 
 income_view = income_view.sort_values(["Pay_Day", "Ticker"], na_position="last")
@@ -284,6 +329,7 @@ total_row = pd.DataFrame([{
     "Monthly_Conservative": con,
     "Monthly_Expected": exp,
     "Monthly_Optimistic": opt,
+    "Income_Share_%": 100.0,
     "Pay_Week": "",
     "Pay_Day": ""
 }])
@@ -300,6 +346,7 @@ st.dataframe(
         "Monthly_Conservative": st.column_config.NumberColumn("Conservative", format="$%0.0f"),
         "Monthly_Expected": st.column_config.NumberColumn("Expected", format="$%0.0f"),
         "Monthly_Optimistic": st.column_config.NumberColumn("Optimistic", format="$%0.0f"),
+        "Income_Share_%": st.column_config.NumberColumn("% of Income", format="%.1f%%"),
         "Pay_Week": st.column_config.TextColumn("Pay Week"),
         "Pay_Day": st.column_config.NumberColumn("Est. Day"),
     },
@@ -324,6 +371,24 @@ st.dataframe(
         "Monthly_Expected": st.column_config.NumberColumn("Expected Deposit", format="$%0.0f"),
     },
 )
+
+# -------------------------
+# INCOME SHARE CHART
+# -------------------------
+st.markdown('<div class="section-title">Income Share by ETF</div>', unsafe_allow_html=True)
+
+share_chart_df = df[["Ticker", "Income_Share_%"]].copy().sort_values("Income_Share_%", ascending=False)
+
+share_chart = alt.Chart(share_chart_df).mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6).encode(
+    y=alt.Y("Ticker:N", sort="-x", title=""),
+    x=alt.X("Income_Share_%:Q", title="% of Expected Income"),
+    tooltip=[
+        alt.Tooltip("Ticker:N"),
+        alt.Tooltip("Income_Share_%:Q", format=".1f")
+    ]
+).properties(height=360)
+
+st.altair_chart(share_chart, use_container_width=True)
 
 st.markdown(
     "<div class='small-note'>This is a paycheck-style estimate, not exact brokerage payment dates. We can fine-tune fund-by-fund later.</div>",

@@ -5,8 +5,28 @@ import altair as alt
 st.set_page_config(
     page_title="Richard's Retirement Paycheck",
     page_icon="💵",
-    layout="wide"
-)
+    layout="st.markdown("## 📊 Portfolio Summary")
+
+total_invested = 295090
+
+try:
+    current_value = int(round(df["Value"].sum()))
+except:
+    current_value = 299240
+
+total_gain = current_value - total_invested
+gain_pct = (total_gain / total_invested) * 100
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric("💼 Invested", f"${total_invested:,.0f}")
+
+with col2:
+    st.metric("📈 Value", f"${current_value:,.0f}")
+
+with col3:
+    st.metric("💰 Gain", f"${total_gain:,.0f}", f"{gain_pct:.2f}%")
 
 st.markdown("## 📊 Portfolio Summary")
 

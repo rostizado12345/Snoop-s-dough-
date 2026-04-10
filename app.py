@@ -1,5 +1,5 @@
 import math
-from typing import Tuple
+from typing import Dict, List
 
 import pandas as pd
 import streamlit as st
@@ -12,282 +12,427 @@ except Exception:
 st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵", layout="wide")
 
 GOAL_MONTHLY = 8000.0
-DEFAULT_TOTAL_INVESTED = 295000.0
-APP_DATA_VERSION = 2
+DEFAULT_TOTAL_INVESTED = 327000.0
 
-TABLE_COLUMNS = ["Ticker", "Shares", "Price", "Yield %", "Use Live Price"]
-
-OLD_SAMPLE_ROWS = [
-    {"Ticker": "SPYI", "Shares": 1000.0, "Price": 50.0, "Yield %": 12.0, "Use Live Price": True},
-    {"Ticker": "QQQI", "Shares": 800.0, "Price": 45.0, "Yield %": 14.0, "Use Live Price": True},
-    {"Ticker": "DIVO", "Shares": 600.0, "Price": 40.0, "Yield %": 5.0, "Use Live Price": True},
-    {"Ticker": "SVOL", "Shares": 500.0, "Price": 25.0, "Yield %": 16.0, "Use Live Price": True},
+DEFAULT_COLUMNS = [
+    "ticker",
+    "shares",
+    "cost_basis_per_share",
+    "target_weight",
+    "annual_income_per_share",
+    "manual_price",
+    "payout_frequency",
+    "payout_months",
+    "notes",
 ]
 
+DEFAULT_ROWS = [
+    ["GDXY", 2600.0, 13.25, 15.0, 2.40, 13.50, "monthly", "all", ""],
+    ["CHPY", 1100.0, 24.90, 6.0, 1.68, 24.75, "monthly", "all", ""],
+    ["FEPI", 650.0, 52.00, 7.0, 6.12, 51.75, "monthly", "all", ""],
+    ["QQQI", 1100.0, 18.40, 10.0, 2.28, 18.70, "monthly", "all", ""],
+    ["AIPI", 700.0, 38.00, 5.0, 4.20, 38.50, "monthly", "all", ""],
+    ["SPYI", 1800.0, 19.80, 12.0, 2.16, 20.10, "monthly", "all", ""],
+    ["DIVO", 700.0, 39.50, 10.0, 2.40, 39.90, "monthly", "all", ""],
+    ["SVOL", 900.0, 23.00, 6.0, 1.92, 23.45, "monthly", "all", ""],
+    ["TLTW", 1200.0, 17.20, 6.0, 1.92, 17.35, "monthly", "all", ""],
+    ["IYRI", 500.0, 23.00, 4.0, 1.80, 22.90, "monthly", "all", ""],
+    ["IWMI", 700.0, 15.80, 4.0, 1.56, 15.75, "monthly", "all", ""],
+    ["IAU", 300.0, 55.00, 4.0, 0.00, 55.20, "none", "none", ""],
+    ["MLPI", 700.0, 25.00, 4.0, 2.88, 25.10, "quarterly", "3,6,9,12", ""],
+    ["FDRXX", 32000.0, 1.00, 7.0, 0.045, 1.00, "monthly", "all", "Cash / sweep"],
+]
 
-def blank_portfolio_df() -> pd.DataFrame:
-    return pd.DataFrame(columns=TABLE_COLUMNS)
-
-
-def normalize_records(df: pd.DataFrame) -> list[dict]:
-    if df is None or df.empty:
-        return []
-    working = df.copy()
-    for col in TABLE_COLUMNS:
-        if col not in working.columns:
-            working[col] = False if col == "Use Live Price" else 0.0
-    working = working[TABLE_COLUMNS].copy()
-    working["Ticker"] = working["Ticker"].fillna("").astype(str).str.upper().str.strip()
-    working["Shares"] = working["Shares"].fillna(0.0).astype(float)
-    working["Price"] = working["Price"].fillna(0.0).astype(float)
-    working["Yield %"] = working["Yield %"].fillna(0.0).astype(float)
-    working["Use Live Price"] = working["Use Live Price"].fillna(False).astype(bool)
-    return working.to_dict(orient="records")
-
-
-def is_old_sample_portfolio(df: pd.DataFrame) -> bool:
-    return normalize_records(df) == normalize_records(pd.DataFrame(OLD_SAMPLE_ROWS))
+MONTH_NAME_MAP = {
+    1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+    7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
+}
 
 
-def init_state() -> None:
-    if "invested_amount" not in st.session_state:
-        st.session_state.invested_amount = DEFAULT_TOTAL_INVESTED
+def make_default_df() -> pd.DataFrame:
+    return pd.DataFrame(DEFAULT_ROWS, columns=DEFAULT_COLUMNS)
 
+
+def ensure_state() -> None:
     if "portfolio_df" not in st.session_state:
-        st.session_state.portfolio_df = blank_portfolio_df()
+        st.session_state.portfolio_df = make_default_df()
 
-    if "last_live_refresh" not in st.session_state:
-        st.session_state.last_live_refresh = "Not refreshed yet"
+    if "invested_amount" not in st.session_state:
+        st.session_state.invested_amount = float(DEFAULT_TOTAL_INVESTED)
 
-    stored_version = st.session_state.get("app_data_version", 0)
-
-    if stored_version < APP_DATA_VERSION:
-        if is_old_sample_portfolio(st.session_state.portfolio_df):
-            st.session_state.portfolio_df = blank_portfolio_df()
-        st.session_state.app_data_version = APP_DATA_VERSION
+    if "price_cache" not in st.session_state:
+        st.session_state.price_cache = {}
 
 
-def to_float(value, default: float = 0.0) -> float:
-    try:
-        if value is None or (isinstance(value, float) and math.isnan(value)):
-            return float(default)
-        return float(value)
-    except Exception:
-        return float(default)
+def clean_numeric(series: pd.Series, default: float = 0.0) -> pd.Series:
+    return pd.to_numeric(series, errors="coerce").fillna(default)
 
 
-def safe_bool(value) -> bool:
-    if isinstance(value, bool):
-        return value
-    if pd.isna(value):
-        return False
-    return str(value).strip().lower() in {"true", "1", "yes", "y"}
+def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    for col in DEFAULT_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+
+    df = df[DEFAULT_COLUMNS]
+
+    text_cols = ["ticker", "payout_frequency", "payout_months", "notes"]
+    for col in text_cols:
+        df[col] = df[col].fillna("").astype(str)
+
+    numeric_cols = ["shares", "cost_basis_per_share", "target_weight", "annual_income_per_share", "manual_price"]
+    for col in numeric_cols:
+        df[col] = clean_numeric(df[col], 0.0)
+
+    df["ticker"] = df["ticker"].str.upper().str.strip()
+    df = df[df["ticker"] != ""].reset_index(drop=True)
+    return df
 
 
-def clean_portfolio_df(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty:
-        return blank_portfolio_df()
+def fetch_live_prices(tickers: List[str]) -> Dict[str, float]:
+    prices: Dict[str, float] = {}
 
-    working = df.copy()
-
-    for col in TABLE_COLUMNS:
-        if col not in working.columns:
-            working[col] = False if col == "Use Live Price" else 0.0
-
-    working["Ticker"] = working["Ticker"].fillna("").astype(str).str.upper().str.strip()
-    working = working[working["Ticker"] != ""].copy()
-
-    working["Shares"] = working["Shares"].apply(lambda x: max(to_float(x, 0.0), 0.0))
-    working["Price"] = working["Price"].apply(lambda x: max(to_float(x, 0.0), 0.0))
-    working["Yield %"] = working["Yield %"].apply(lambda x: max(to_float(x, 0.0), 0.0))
-    working["Use Live Price"] = working["Use Live Price"].apply(safe_bool)
-
-    return working[TABLE_COLUMNS].reset_index(drop=True)
-
-
-def fetch_live_prices(tickers: list[str]) -> dict[str, float]:
-    prices: dict[str, float] = {}
-    if yf is None or not tickers:
+    if not tickers:
         return prices
 
-    unique_tickers = sorted({t for t in tickers if t})
-    for ticker in unique_tickers:
-        try:
-            hist = yf.Ticker(ticker).history(period="5d", interval="1d", auto_adjust=False)
-            if hist is not None and not hist.empty:
-                close_series = hist["Close"].dropna()
-                if not close_series.empty:
-                    prices[ticker] = float(close_series.iloc[-1])
-                    continue
-        except Exception:
-            pass
+    if yf is None:
+        return prices
 
-        try:
-            info = yf.Ticker(ticker).fast_info
-            last_price = getattr(info, "last_price", None)
-            if last_price:
-                prices[ticker] = float(last_price)
-        except Exception:
-            pass
+    symbols = [t for t in tickers if t and t.upper() != "FDRXX"]
+
+    if not symbols:
+        return prices
+
+    try:
+        history = yf.download(
+            tickers=symbols,
+            period="5d",
+            interval="1d",
+            auto_adjust=False,
+            progress=False,
+            group_by="ticker",
+            threads=False,
+        )
+
+        if history is None or getattr(history, "empty", True):
+            return prices
+
+        if isinstance(history.columns, pd.MultiIndex):
+            for ticker in symbols:
+                try:
+                    close_series = history[(ticker, "Close")].dropna()
+                    if not close_series.empty:
+                        prices[ticker] = float(close_series.iloc[-1])
+                except Exception:
+                    continue
+        else:
+            close_series = history["Close"].dropna()
+            if len(symbols) == 1 and not close_series.empty:
+                prices[symbols[0]] = float(close_series.iloc[-1])
+
+    except Exception:
+        return prices
 
     return prices
 
 
-def build_calculation_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
-    calc = clean_portfolio_df(df)
-    if calc.empty:
-        calc["Current Price"] = []
-        calc["Position Value"] = []
-        calc["Annual Income"] = []
-        calc["Monthly Income"] = []
-        return calc, 0
+def get_price_for_row(row: pd.Series, live_prices: Dict[str, float]) -> float:
+    ticker = str(row["ticker"]).upper().strip()
+    manual_price = float(row["manual_price"]) if pd.notna(row["manual_price"]) else 0.0
 
-    live_prices = fetch_live_prices(calc["Ticker"].tolist())
-    live_count = 0
-    current_prices = []
+    if ticker == "FDRXX":
+        return 1.0
 
-    for _, row in calc.iterrows():
-        ticker = row["Ticker"]
-        manual_price = to_float(row["Price"], 0.0)
-        use_live = safe_bool(row["Use Live Price"])
-        live_price = live_prices.get(ticker)
+    live_price = live_prices.get(ticker)
+    if live_price is not None and live_price > 0:
+        return float(live_price)
 
-        if use_live and live_price and live_price > 0:
-            current_prices.append(float(live_price))
-            live_count += 1
-        else:
-            current_prices.append(manual_price)
+    if manual_price > 0:
+        return float(manual_price)
 
-    calc["Current Price"] = current_prices
-    calc["Position Value"] = calc["Shares"] * calc["Current Price"]
-    calc["Annual Income"] = calc["Position Value"] * (calc["Yield %"] / 100.0)
-    calc["Monthly Income"] = calc["Annual Income"] / 12.0
-
-    return calc, live_count
+    cost_basis = float(row["cost_basis_per_share"]) if pd.notna(row["cost_basis_per_share"]) else 0.0
+    return cost_basis
 
 
-def fmt_money(value: float) -> str:
+def parse_months(text: str) -> List[int]:
+    raw = str(text).strip().lower()
+
+    if raw in {"", "none", "nan"}:
+        return []
+
+    if raw == "all":
+        return list(range(1, 13))
+
+    months: List[int] = []
+    for piece in raw.split(","):
+        piece = piece.strip()
+        if not piece:
+            continue
+        try:
+            month_num = int(piece)
+            if 1 <= month_num <= 12:
+                months.append(month_num)
+        except Exception:
+            continue
+
+    return sorted(list(set(months)))
+
+
+def monthly_income_schedule(df: pd.DataFrame) -> pd.DataFrame:
+    month_totals = {month: 0.0 for month in range(1, 13)}
+
+    for _, row in df.iterrows():
+        annual_income = float(row["annual_income_per_share"]) * float(row["shares"])
+        frequency = str(row["payout_frequency"]).strip().lower()
+        months = parse_months(row["payout_months"])
+
+        if annual_income <= 0:
+            continue
+
+        if frequency == "monthly":
+            for month in range(1, 13):
+                month_totals[month] += annual_income / 12.0
+        elif frequency == "quarterly":
+            payout_months = months if months else [3, 6, 9, 12]
+            per_payment = annual_income / max(len(payout_months), 1)
+            for month in payout_months:
+                month_totals[month] += per_payment
+        elif frequency == "semiannual":
+            payout_months = months if months else [6, 12]
+            per_payment = annual_income / max(len(payout_months), 1)
+            for month in payout_months:
+                month_totals[month] += per_payment
+        elif frequency == "annual":
+            payout_months = months if months else [12]
+            per_payment = annual_income / max(len(payout_months), 1)
+            for month in payout_months:
+                month_totals[month] += per_payment
+
+    return pd.DataFrame(
+        {
+            "Month": [MONTH_NAME_MAP[m] for m in range(1, 13)],
+            "Estimated Income": [month_totals[m] for m in range(1, 13)],
+        }
+    )
+
+
+def currency(value: float) -> str:
     return f"${value:,.2f}"
 
 
-def fmt_pct(value: float) -> str:
-    return f"{value:.1f}%"
-
-
-init_state()
+ensure_state()
 
 st.title("💵 Retirement Paycheck Dashboard")
-st.caption("Working version with invested amount tracking, editable portfolio, income math, and optional live prices.")
+st.caption("Live-price estimate with separate tracking for deposits vs. market gains.")
+
+left_header, right_header = st.columns([2, 1])
+with right_header:
+    if st.button("Reset Portfolio Table to Default", use_container_width=True):
+        st.session_state.portfolio_df = make_default_df()
+        st.success("Portfolio table reset to default values.")
+        st.rerun()
 
 st.subheader("Add New Money")
-button_cols = st.columns(3)
+
+button_cols = st.columns(4)
 if button_cols[0].button("+ $1,000", use_container_width=True):
     st.session_state.invested_amount += 1000.0
+    st.rerun()
 if button_cols[1].button("+ $5,000", use_container_width=True):
     st.session_state.invested_amount += 5000.0
+    st.rerun()
 if button_cols[2].button("+ $10,000", use_container_width=True):
     st.session_state.invested_amount += 10000.0
-
-st.session_state.invested_amount = st.number_input(
-    "Total Invested Amount",
-    min_value=0.0,
-    step=1000.0,
-    value=float(st.session_state.invested_amount),
-    format="%.2f",
-)
-
-st.subheader("Portfolio")
-action_col1, action_col2 = st.columns(2)
-if action_col1.button("Clear Portfolio", use_container_width=True):
-    st.session_state.portfolio_df = blank_portfolio_df()
+    st.rerun()
+if button_cols[3].button("+ $32,000", use_container_width=True):
+    st.session_state.invested_amount += 32000.0
     st.rerun()
 
-if action_col2.button("Load Example Portfolio", use_container_width=True):
-    st.session_state.portfolio_df = pd.DataFrame(OLD_SAMPLE_ROWS)[TABLE_COLUMNS]
-    st.rerun()
+edit_cols = st.columns([1.2, 1, 1])
+with edit_cols[0]:
+    st.session_state.invested_amount = st.number_input(
+        "Total Invested / Contributions",
+        min_value=0.0,
+        step=1000.0,
+        value=float(st.session_state.invested_amount),
+        help="This should only increase when you add your own money. It should not move with market gains.",
+    )
+with edit_cols[1]:
+    custom_add = st.number_input("Custom deposit", min_value=0.0, step=500.0, value=0.0)
+with edit_cols[2]:
+    st.write("")
+    st.write("")
+    if st.button("Add Custom Deposit", use_container_width=True):
+        if custom_add > 0:
+            st.session_state.invested_amount += float(custom_add)
+            st.rerun()
+
+st.subheader("Portfolio Holdings")
+
+working_df = normalize_dataframe(st.session_state.portfolio_df)
 
 edited_df = st.data_editor(
-    st.session_state.portfolio_df,
-    key="portfolio_editor",
+    working_df,
     num_rows="dynamic",
     use_container_width=True,
     hide_index=True,
     column_config={
-        "Ticker": st.column_config.TextColumn("Ticker", help="ETF or stock symbol, like SPYI"),
-        "Shares": st.column_config.NumberColumn("Shares", min_value=0.0, step=1.0, format="%.4f"),
-        "Price": st.column_config.NumberColumn("Price", min_value=0.0, step=0.01, format="%.2f"),
-        "Yield %": st.column_config.NumberColumn("Yield %", min_value=0.0, step=0.1, format="%.2f"),
-        "Use Live Price": st.column_config.CheckboxColumn("Use Live Price"),
+        "ticker": st.column_config.TextColumn("Ticker"),
+        "shares": st.column_config.NumberColumn("Shares", format="%.4f"),
+        "cost_basis_per_share": st.column_config.NumberColumn("Cost / Share", format="$%.2f"),
+        "target_weight": st.column_config.NumberColumn("Target %", format="%.2f"),
+        "annual_income_per_share": st.column_config.NumberColumn("Annual Income / Share", format="$%.4f"),
+        "manual_price": st.column_config.NumberColumn("Manual Price", format="$%.2f"),
+        "payout_frequency": st.column_config.SelectboxColumn(
+            "Payout Frequency",
+            options=["monthly", "quarterly", "semiannual", "annual", "none"],
+        ),
+        "payout_months": st.column_config.TextColumn("Payout Months"),
+        "notes": st.column_config.TextColumn("Notes"),
     },
+    key="portfolio_editor",
 )
 
-st.session_state.portfolio_df = clean_portfolio_df(edited_df)
+portfolio_df = normalize_dataframe(pd.DataFrame(edited_df))
+st.session_state.portfolio_df = portfolio_df
 
-did_refresh = st.button("Refresh Live Prices", use_container_width=True)
-if did_refresh:
-    st.session_state.last_live_refresh = pd.Timestamp.now().strftime("%Y-%m-%d %I:%M:%S %p")
-st.caption(f"Last refresh click: {st.session_state.last_live_refresh}")
+tickers = portfolio_df["ticker"].tolist()
+live_prices = fetch_live_prices(tickers)
 
-calc_df, live_count = build_calculation_df(st.session_state.portfolio_df)
+portfolio_df["current_price"] = portfolio_df.apply(lambda row: get_price_for_row(row, live_prices), axis=1)
+portfolio_df["market_value"] = portfolio_df["shares"] * portfolio_df["current_price"]
+portfolio_df["cost_basis_total"] = portfolio_df["shares"] * portfolio_df["cost_basis_per_share"]
+portfolio_df["position_gain_loss"] = portfolio_df["market_value"] - portfolio_df["cost_basis_total"]
+portfolio_df["annual_income"] = portfolio_df["shares"] * portfolio_df["annual_income_per_share"]
+portfolio_df["monthly_income"] = portfolio_df["annual_income"] / 12.0
 
+total_value = float(portfolio_df["market_value"].sum())
+total_cost_basis = float(portfolio_df["cost_basis_total"].sum())
 total_invested = float(st.session_state.invested_amount)
-portfolio_value = float(calc_df["Position Value"].sum()) if not calc_df.empty else 0.0
-annual_income = float(calc_df["Annual Income"].sum()) if not calc_df.empty else 0.0
-monthly_income = annual_income / 12.0
-gain_loss = portfolio_value - total_invested
-goal_progress = (monthly_income / GOAL_MONTHLY * 100.0) if GOAL_MONTHLY > 0 else 0.0
+true_gain_loss = total_value - total_invested
+holdings_gain_loss = total_value - total_cost_basis
+annual_income_total = float(portfolio_df["annual_income"].sum())
+monthly_income_total = annual_income_total / 12.0
+goal_progress = 0.0 if GOAL_MONTHLY <= 0 else max(0.0, min(monthly_income_total / GOAL_MONTHLY, 1.0))
+cash_value = float(portfolio_df.loc[portfolio_df["ticker"] == "FDRXX", "market_value"].sum())
 
-st.subheader("Summary")
-m1, m2 = st.columns(2)
-m3, m4 = st.columns(2)
-m1.metric("Total Invested", fmt_money(total_invested))
-m2.metric("Portfolio Value", fmt_money(portfolio_value))
-m3.metric("Monthly Income", fmt_money(monthly_income))
-m4.metric("Annual Income", fmt_money(annual_income))
-
-if not calc_df.empty:
-    if gain_loss >= 0:
-        st.success(f"Gain / Loss: {fmt_money(gain_loss)}")
-    else:
-        st.error(f"Gain / Loss: {fmt_money(gain_loss)}")
-else:
-    st.info("Portfolio is blank. Add your real holdings above.")
+metric_cols = st.columns(5)
+metric_cols[0].metric("Current Portfolio Value", currency(total_value))
+metric_cols[1].metric("Total Invested", currency(total_invested))
+metric_cols[2].metric("True Gain / Loss", currency(true_gain_loss))
+metric_cols[3].metric("Estimated Monthly Income", currency(monthly_income_total))
+metric_cols[4].metric("Cash / Sweep", currency(cash_value))
 
 st.subheader("Goal Progress")
-st.progress(min(max(goal_progress / 100.0, 0.0), 1.0))
-g1, g2, g3 = st.columns(3)
-g1.metric("Income Goal", fmt_money(GOAL_MONTHLY) + "/mo")
-g2.metric("Current Progress", fmt_pct(goal_progress))
-g3.metric("Gap to Goal", fmt_money(max(GOAL_MONTHLY - monthly_income, 0.0)) + "/mo")
+st.progress(goal_progress, text=f"{goal_progress * 100:.1f}% of ${GOAL_MONTHLY:,.0f}/month goal")
 
-st.subheader("Income Breakdown")
-if calc_df.empty:
-    st.info("Add at least one holding in the portfolio table above.")
-else:
-    display_df = calc_df.copy()
-    display_df["Current Price"] = display_df["Current Price"].map(fmt_money)
-    display_df["Position Value"] = display_df["Position Value"].map(fmt_money)
-    display_df["Annual Income"] = display_df["Annual Income"].map(fmt_money)
-    display_df["Monthly Income"] = display_df["Monthly Income"].map(fmt_money)
-    display_df["Yield %"] = display_df["Yield %"].map(lambda x: f"{x:.2f}%")
+summary_cols = st.columns(2)
+
+with summary_cols[0]:
+    st.markdown("### Portfolio Summary")
+    summary_table = portfolio_df[
+        [
+            "ticker",
+            "shares",
+            "current_price",
+            "market_value",
+            "cost_basis_total",
+            "position_gain_loss",
+            "monthly_income",
+        ]
+    ].copy()
+    summary_table.columns = [
+        "Ticker",
+        "Shares",
+        "Current Price",
+        "Market Value",
+        "Cost Basis Total",
+        "Gain / Loss",
+        "Monthly Income",
+    ]
     st.dataframe(
-        display_df[["Ticker", "Shares", "Current Price", "Position Value", "Yield %", "Monthly Income", "Annual Income"]],
+        summary_table.style.format(
+            {
+                "Shares": "{:,.4f}",
+                "Current Price": "${:,.2f}",
+                "Market Value": "${:,.2f}",
+                "Cost Basis Total": "${:,.2f}",
+                "Gain / Loss": "${:,.2f}",
+                "Monthly Income": "${:,.2f}",
+            }
+        ),
         use_container_width=True,
         hide_index=True,
     )
 
-with st.expander("Notes / How the math works"):
+with summary_cols[1]:
+    st.markdown("### Income Breakdown")
+    income_table = portfolio_df[["ticker", "annual_income", "monthly_income"]].copy()
+    income_table.columns = ["Ticker", "Annual Income", "Monthly Income"]
+    st.dataframe(
+        income_table.style.format(
+            {
+                "Annual Income": "${:,.2f}",
+                "Monthly Income": "${:,.2f}",
+            }
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+schedule_df = monthly_income_schedule(portfolio_df)
+
+schedule_cols = st.columns([1.2, 0.8])
+with schedule_cols[0]:
+    st.markdown("### Estimated Monthly Dividend Calendar")
+    st.bar_chart(schedule_df.set_index("Month"))
+
+with schedule_cols[1]:
+    st.markdown("### Monthly Income by Month")
+    st.dataframe(
+        schedule_df.style.format({"Estimated Income": "${:,.2f}"}),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+st.markdown("### Rebalance Helper")
+portfolio_df["actual_weight"] = portfolio_df["market_value"] / total_value * 100 if total_value > 0 else 0.0
+portfolio_df["target_value"] = total_value * portfolio_df["target_weight"] / 100.0
+portfolio_df["dollar_gap"] = portfolio_df["target_value"] - portfolio_df["market_value"]
+
+rebalance_table = portfolio_df[
+    ["ticker", "market_value", "actual_weight", "target_weight", "target_value", "dollar_gap"]
+].copy()
+rebalance_table.columns = [
+    "Ticker",
+    "Current Value",
+    "Actual %",
+    "Target %",
+    "Target Value",
+    "Add / (Trim)",
+]
+st.dataframe(
+    rebalance_table.style.format(
+        {
+            "Current Value": "${:,.2f}",
+            "Actual %": "{:,.2f}%",
+            "Target %": "{:,.2f}%",
+            "Target Value": "${:,.2f}",
+            "Add / (Trim)": "${:,.2f}",
+        }
+    ),
+    use_container_width=True,
+    hide_index=True,
+)
+
+with st.expander("Important Notes"):
     st.write(
         """
-- **Portfolio Value** = Shares × Current Price
-- **Annual Income** = Position Value × Yield %
-- **Monthly Income** = Annual Income ÷ 12
-- **Gain/Loss** = Portfolio Value − Total Invested Amount
-
-If live prices are available, checked rows use Yahoo Finance through `yfinance`.
-If live prices are not available, the app falls back to the manual **Price** column.
-"""
+- **Total Invested / Contributions** should only change when you add your own money.
+- **Current Portfolio Value** moves with the market.
+- **True Gain / Loss** = Current Portfolio Value minus Total Invested.
+- **FDRXX** is treated like cash at $1.00 per share so it does not look like a fake gain.
+- Live prices come from Yahoo Finance when available. If a live price fails, the app falls back to **Manual Price**.
+        """
     )
-    st.write(f"Rows currently using live price successfully: **{live_count}**")
-    if yf is None:
-        st.warning("`yfinance` is not installed in this environment, so manual prices are being used.")

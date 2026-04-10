@@ -33,7 +33,7 @@ def init_state() -> None:
         st.session_state.last_live_refresh = "Not refreshed yet"
 
 
-def to_float(value, default=0.0) -> float:
+def to_float(value, default: float = 0.0) -> float:
     try:
         if value is None or (isinstance(value, float) and math.isnan(value)):
             return float(default)
@@ -143,7 +143,7 @@ def fmt_pct(value: float) -> str:
 init_state()
 
 st.title("💵 Retirement Paycheck Dashboard")
-st.caption("Simple working version with invested amount tracking, editable portfolio, income math, and optional live prices.")
+st.caption("Working version with invested amount tracking, editable portfolio, income math, and optional live prices.")
 
 st.subheader("Add New Money")
 button_cols = st.columns(3)
@@ -154,18 +154,13 @@ if button_cols[1].button("+ $5,000", use_container_width=True):
 if button_cols[2].button("+ $10,000", use_container_width=True):
     st.session_state.invested_amount += 10000.0
 
-invest_cols = st.columns([5, 1, 1])
-st.session_state.invested_amount = invest_cols[0].number_input(
+st.session_state.invested_amount = st.number_input(
     "Total Invested Amount",
     min_value=0.0,
     step=1000.0,
     value=float(st.session_state.invested_amount),
     format="%.2f",
 )
-if invest_cols[1].button("−", use_container_width=True):
-    st.session_state.invested_amount = max(0.0, st.session_state.invested_amount - 1000.0)
-if invest_cols[2].button("+", use_container_width=True):
-    st.session_state.invested_amount += 1000.0
 
 st.subheader("Portfolio")
 edited_df = st.data_editor(
@@ -184,11 +179,10 @@ edited_df = st.data_editor(
 
 st.session_state.portfolio_df = clean_portfolio_df(edited_df)
 
-refresh_col1, refresh_col2 = st.columns([1, 4])
-did_refresh = refresh_col1.button("Refresh Live Prices", use_container_width=True)
+did_refresh = st.button("Refresh Live Prices", use_container_width=True)
 if did_refresh:
     st.session_state.last_live_refresh = pd.Timestamp.now().strftime("%Y-%m-%d %I:%M:%S %p")
-refresh_col2.caption(f"Last refresh click: {st.session_state.last_live_refresh}")
+st.caption(f"Last refresh click: {st.session_state.last_live_refresh}")
 
 calc_df, live_count = build_calculation_df(st.session_state.portfolio_df)
 
@@ -200,11 +194,17 @@ gain_loss = portfolio_value - total_invested
 goal_progress = (monthly_income / GOAL_MONTHLY * 100.0) if GOAL_MONTHLY > 0 else 0.0
 
 st.subheader("Summary")
-m1, m2, m3, m4 = st.columns(4)
+m1, m2 = st.columns(2)
+m3, m4 = st.columns(2)
 m1.metric("Total Invested", fmt_money(total_invested))
-m2.metric("Portfolio Value", fmt_money(portfolio_value), delta=fmt_money(gain_loss))
+m2.metric("Portfolio Value", fmt_money(portfolio_value))
 m3.metric("Monthly Income", fmt_money(monthly_income))
 m4.metric("Annual Income", fmt_money(annual_income))
+
+if gain_loss >= 0:
+    st.success(f"Gain / Loss: {fmt_money(gain_loss)}")
+else:
+    st.error(f"Gain / Loss: {fmt_money(gain_loss)}")
 
 st.subheader("Goal Progress")
 st.progress(min(max(goal_progress / 100.0, 0.0), 1.0))
@@ -232,10 +232,10 @@ else:
 with st.expander("Notes / How the math works"):
     st.write(
         """
-- **Portfolio Value** = Shares × Current Price  
-- **Annual Income** = Position Value × Yield %  
-- **Monthly Income** = Annual Income ÷ 12  
-- **Gain/Loss** = Portfolio Value − Total Invested Amount  
+- **Portfolio Value** = Shares × Current Price
+- **Annual Income** = Position Value × Yield %
+- **Monthly Income** = Annual Income ÷ 12
+- **Gain/Loss** = Portfolio Value − Total Invested Amount
 
 If live prices are available, checked rows use Yahoo Finance through `yfinance`.
 If live prices are not available, the app falls back to the manual **Price** column.

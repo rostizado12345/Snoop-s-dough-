@@ -26,7 +26,7 @@ DEFAULT_COLUMNS = [
     "notes",
 ]
 
-# Uses the real position quantities / basis values you surfaced from Fidelity,
+# Uses the real position quantities / basis values surfaced from Fidelity,
 # with CHPY avg cost derived from its shown value and total gain/loss.
 DEFAULT_ROWS = [
     ["AIPI", 668.196, 34.05, 33.79, 5.0, 0.124, "monthly", "all", ""],
@@ -48,6 +48,41 @@ DEFAULT_ROWS = [
 MONTH_NAME_MAP = {
     1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
     7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
+}
+
+
+SAFE_MULTIPLIERS = {
+    "AIPI": 0.75,
+    "CHPY": 0.80,
+    "DIVO": 0.95,
+    "FDRXX": 1.00,
+    "FEPI": 0.75,
+    "GDXY": 0.60,
+    "IAU": 1.00,
+    "IWMI": 0.75,
+    "IYRI": 0.85,
+    "MLPI": 0.80,
+    "QQQI": 0.80,
+    "SPYI": 0.85,
+    "SVOL": 0.80,
+    "TLTW": 0.85,
+}
+
+REALISTIC_MULTIPLIERS = {
+    "AIPI": 0.88,
+    "CHPY": 0.90,
+    "DIVO": 0.98,
+    "FDRXX": 1.00,
+    "FEPI": 0.88,
+    "GDXY": 0.78,
+    "IAU": 1.00,
+    "IWMI": 0.88,
+    "IYRI": 0.92,
+    "MLPI": 0.90,
+    "QQQI": 0.90,
+    "SPYI": 0.92,
+    "SVOL": 0.90,
+    "TLTW": 0.92,
 }
 
 
@@ -150,11 +185,11 @@ def parse_months(text: str) -> List[int]:
     return sorted(list(set(months)))
 
 
-def monthly_income_schedule(df: pd.DataFrame) -> pd.DataFrame:
+def monthly_income_schedule(df: pd.DataFrame, annual_income_column: str) -> pd.DataFrame:
     month_totals = {month: 0.0 for month in range(1, 13)}
 
     for _, row in df.iterrows():
-        annual_income = float(row["annual_income"])
+        annual_income = float(row[annual_income_column])
         frequency = str(row["payout_frequency"]).strip().lower()
         months = parse_months(row["payout_months"])
 
@@ -193,10 +228,18 @@ def currency(value: float) -> str:
     return f"${value:,.2f}"
 
 
+def get_safe_multiplier(ticker: str) -> float:
+    return SAFE_MULTIPLIERS.get(str(ticker).upper(), 0.80)
+
+
+def get_realistic_multiplier(ticker: str) -> float:
+    return REALISTIC_MULTIPLIERS.get(str(ticker).upper(), 0.90)
+
+
 ensure_state()
 
 st.title("💵 Retirement Paycheck Dashboard")
-st.caption("Full dashboard locked to real position quantities, basis, cash, and position gain/loss logic.")
+st.caption("Full dashboard locked to real position quantities, basis, cash, position gain/loss logic, and income tiers.")
 
 header_cols = st.columns([3, 1])
 with header_cols[1]:
@@ -305,35 +348,52 @@ portfolio_df["position_gain_loss"] = portfolio_df.apply(
     axis=1,
 )
 portfolio_df["actual_weight"] = 0.0
-portfolio_df["annual_income"] = portfolio_df["market_value"] * portfolio_df["annual_yield"]
-portfolio_df["monthly_income"] = portfolio_df["annual_income"] / 12.0
+portfolio_df["annual_income_actual"] = portfolio_df["market_value"] * portfolio_df["annual_yield"]
+portfolio_df["annual_income_realistic"] = portfolio_df.apply(
+    lambda row: float(row["annual_income_actual"]) * get_realistic_multiplier(str(row["ticker"])),
+    axis=1,
+)
+portfolio_df["annual_income_safe"] = portfolio_df.apply(
+    lambda row: float(row["annual_income_actual"]) * get_safe_multiplier(str(row["ticker"])),
+    axis=1,
+)
+portfolio_df["monthly_income_actual"] = portfolio_df["annual_income_actual"] / 12.0
+portfolio_df["monthly_income_realistic"] = portfolio_df["annual_income_realistic"] / 12.0
+portfolio_df["monthly_income_safe"] = portfolio_df["annual_income_safe"] / 12.0
 
 total_value = float(portfolio_df["market_value"].sum())
 if total_value > 0:
     portfolio_df["actual_weight"] = portfolio_df["market_value"] / total_value * 100.0
 
 tracked_position_gl = float(portfolio_df["position_gain_loss"].sum())
-total_cost_basis_ex_cash = float(portfolio_df.loc[portfolio_df["ticker"].str.upper() != "FDRXX", "cost_basis_total"].sum())
 cash_sweep = float(portfolio_df.loc[portfolio_df["ticker"].str.upper() == "FDRXX", "market_value"].sum())
 total_contributions = float(st.session_state.total_contributions)
 net_vs_contributions = total_value - total_contributions
-annual_income_total = float(portfolio_df["annual_income"].sum())
-monthly_income_total = annual_income_total / 12.0
-goal_progress = 0.0 if GOAL_MONTHLY <= 0 else max(0.0, min(monthly_income_total / GOAL_MONTHLY, 1.0))
+annual_income_actual_total = float(portfolio_df["annual_income_actual"].sum())
+annual_income_realistic_total = float(portfolio_df["annual_income_realistic"].sum())
+annual_income_safe_total = float(portfolio_df["annual_income_safe"].sum())
+monthly_income_actual_total = annual_income_actual_total / 12.0
+monthly_income_realistic_total = annual_income_realistic_total / 12.0
+monthly_income_safe_total = annual_income_safe_total / 12.0
+goal_progress = 0.0 if GOAL_MONTHLY <= 0 else max(0.0, min(monthly_income_realistic_total / GOAL_MONTHLY, 1.0))
 
 portfolio_df["target_value"] = total_value * portfolio_df["target_weight"] / 100.0
 portfolio_df["dollar_gap"] = portfolio_df["target_value"] - portfolio_df["market_value"]
 
-metric_cols = st.columns(6)
+metric_cols = st.columns(5)
 metric_cols[0].metric("Current Portfolio Value", currency(total_value))
 metric_cols[1].metric("Cash / Sweep", currency(cash_sweep))
 metric_cols[2].metric("Position Gain / Loss", currency(tracked_position_gl))
 metric_cols[3].metric("Total Contributions", currency(total_contributions))
 metric_cols[4].metric("Net vs Contributions", currency(net_vs_contributions))
-metric_cols[5].metric("Estimated Monthly Income", currency(monthly_income_total))
+
+income_metric_cols = st.columns(3)
+income_metric_cols[0].metric("Safe Monthly Income", currency(monthly_income_safe_total))
+income_metric_cols[1].metric("Realistic Monthly Income", currency(monthly_income_realistic_total))
+income_metric_cols[2].metric("Actual Monthly Income", currency(monthly_income_actual_total))
 
 st.subheader("Goal Progress")
-st.progress(goal_progress, text=f"{goal_progress * 100:.1f}% of ${GOAL_MONTHLY:,.0f}/month goal")
+st.progress(goal_progress, text=f"{goal_progress * 100:.1f}% of ${GOAL_MONTHLY:,.0f}/month goal (using Realistic income)")
 
 summary_cols = st.columns(2)
 
@@ -376,28 +436,59 @@ with summary_cols[0]:
 
 with summary_cols[1]:
     st.markdown("### Income Breakdown")
-    income_table = portfolio_df[["ticker", "annual_income", "monthly_income"]].copy()
-    income_table.columns = ["Ticker", "Annual Income", "Monthly Income"]
+    income_table = portfolio_df[
+        ["ticker", "annual_income_safe", "annual_income_realistic", "annual_income_actual", "monthly_income_safe", "monthly_income_realistic", "monthly_income_actual"]
+    ].copy()
+    income_table.columns = [
+        "Ticker",
+        "Safe Annual",
+        "Realistic Annual",
+        "Actual Annual",
+        "Safe Monthly",
+        "Realistic Monthly",
+        "Actual Monthly",
+    ]
     st.dataframe(
         income_table.style.format(
             {
-                "Annual Income": "${:,.2f}",
-                "Monthly Income": "${:,.2f}",
+                "Safe Annual": "${:,.2f}",
+                "Realistic Annual": "${:,.2f}",
+                "Actual Annual": "${:,.2f}",
+                "Safe Monthly": "${:,.2f}",
+                "Realistic Monthly": "${:,.2f}",
+                "Actual Monthly": "${:,.2f}",
             }
         ),
         use_container_width=True,
         hide_index=True,
     )
 
-schedule_df = monthly_income_schedule(portfolio_df)
+schedule_actual_df = monthly_income_schedule(portfolio_df, "annual_income_actual")
+schedule_realistic_df = monthly_income_schedule(portfolio_df, "annual_income_realistic")
+schedule_safe_df = monthly_income_schedule(portfolio_df, "annual_income_safe")
+
 schedule_cols = st.columns([1.2, 0.8])
 with schedule_cols[0]:
-    st.markdown("### Estimated Monthly Dividend Calendar")
-    st.bar_chart(schedule_df.set_index("Month"))
+    st.markdown("### Realistic Monthly Dividend Calendar")
+    st.bar_chart(schedule_realistic_df.set_index("Month"))
 with schedule_cols[1]:
     st.markdown("### Monthly Income by Month")
+    schedule_compare_df = pd.DataFrame(
+        {
+            "Month": schedule_realistic_df["Month"],
+            "Safe": schedule_safe_df["Estimated Income"],
+            "Realistic": schedule_realistic_df["Estimated Income"],
+            "Actual": schedule_actual_df["Estimated Income"],
+        }
+    )
     st.dataframe(
-        schedule_df.style.format({"Estimated Income": "${:,.2f}"}),
+        schedule_compare_df.style.format(
+            {
+                "Safe": "${:,.2f}",
+                "Realistic": "${:,.2f}",
+                "Actual": "${:,.2f}",
+            }
+        ),
         use_container_width=True,
         hide_index=True,
     )
@@ -431,11 +522,13 @@ st.dataframe(
 with st.expander("Important Notes"):
     st.write(
         """
-- **Position Gain / Loss** is now calculated from each holding's own basis, much closer to Fidelity's logic.
+- **Position Gain / Loss** is calculated from each holding's own basis, much closer to Fidelity's logic.
 - **Cash / Sweep** in FDRXX is treated as cash, not profit.
 - **Total Contributions** tracks money you added to the account.
 - **Net vs Contributions** is separate from **Position Gain / Loss** so deposits do not get mislabeled as market gains.
+- **Safe / Realistic / Actual** income tiers are shown separately so the app does not default to one optimistic number.
+- **Goal Progress** now uses **Realistic Monthly Income**.
 - Live prices come from Yahoo Finance when available. If a live price fails, the app uses **Manual Price**.
-- If you update any quantity or avg cost to match Fidelity, the gain/loss math will update automatically.
+- If you update any quantity, avg cost, price, or yield to match Fidelity, the income and gain/loss math will update automatically.
         """
     )

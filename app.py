@@ -13,17 +13,58 @@ st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵",
 
 GOAL_MONTHLY = 8000.0
 DEFAULT_TOTAL_INVESTED = 295000.0
+APP_DATA_VERSION = 2
 
 TABLE_COLUMNS = ["Ticker", "Shares", "Price", "Yield %", "Use Live Price"]
+
+OLD_SAMPLE_ROWS = [
+    {"Ticker": "SPYI", "Shares": 1000.0, "Price": 50.0, "Yield %": 12.0, "Use Live Price": True},
+    {"Ticker": "QQQI", "Shares": 800.0, "Price": 45.0, "Yield %": 14.0, "Use Live Price": True},
+    {"Ticker": "DIVO", "Shares": 600.0, "Price": 40.0, "Yield %": 5.0, "Use Live Price": True},
+    {"Ticker": "SVOL", "Shares": 500.0, "Price": 25.0, "Yield %": 16.0, "Use Live Price": True},
+]
+
+
+def blank_portfolio_df() -> pd.DataFrame:
+    return pd.DataFrame(columns=TABLE_COLUMNS)
+
+
+def normalize_records(df: pd.DataFrame) -> list[dict]:
+    if df is None or df.empty:
+        return []
+    working = df.copy()
+    for col in TABLE_COLUMNS:
+        if col not in working.columns:
+            working[col] = False if col == "Use Live Price" else 0.0
+    working = working[TABLE_COLUMNS].copy()
+    working["Ticker"] = working["Ticker"].fillna("").astype(str).str.upper().str.strip()
+    working["Shares"] = working["Shares"].fillna(0.0).astype(float)
+    working["Price"] = working["Price"].fillna(0.0).astype(float)
+    working["Yield %"] = working["Yield %"].fillna(0.0).astype(float)
+    working["Use Live Price"] = working["Use Live Price"].fillna(False).astype(bool)
+    return working.to_dict(orient="records")
+
+
+def is_old_sample_portfolio(df: pd.DataFrame) -> bool:
+    return normalize_records(df) == normalize_records(pd.DataFrame(OLD_SAMPLE_ROWS))
 
 
 def init_state() -> None:
     if "invested_amount" not in st.session_state:
         st.session_state.invested_amount = DEFAULT_TOTAL_INVESTED
+
     if "portfolio_df" not in st.session_state:
-        st.session_state.portfolio_df = pd.DataFrame(columns=TABLE_COLUMNS)
+        st.session_state.portfolio_df = blank_portfolio_df()
+
     if "last_live_refresh" not in st.session_state:
         st.session_state.last_live_refresh = "Not refreshed yet"
+
+    stored_version = st.session_state.get("app_data_version", 0)
+
+    if stored_version < APP_DATA_VERSION:
+        if is_old_sample_portfolio(st.session_state.portfolio_df):
+            st.session_state.portfolio_df = blank_portfolio_df()
+        st.session_state.app_data_version = APP_DATA_VERSION
 
 
 def to_float(value, default: float = 0.0) -> float:
@@ -45,7 +86,7 @@ def safe_bool(value) -> bool:
 
 def clean_portfolio_df(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
-        return pd.DataFrame(columns=TABLE_COLUMNS)
+        return blank_portfolio_df()
 
     working = df.copy()
 
@@ -156,8 +197,18 @@ st.session_state.invested_amount = st.number_input(
 )
 
 st.subheader("Portfolio")
+action_col1, action_col2 = st.columns(2)
+if action_col1.button("Clear Portfolio", use_container_width=True):
+    st.session_state.portfolio_df = blank_portfolio_df()
+    st.rerun()
+
+if action_col2.button("Load Example Portfolio", use_container_width=True):
+    st.session_state.portfolio_df = pd.DataFrame(OLD_SAMPLE_ROWS)[TABLE_COLUMNS]
+    st.rerun()
+
 edited_df = st.data_editor(
     st.session_state.portfolio_df,
+    key="portfolio_editor",
     num_rows="dynamic",
     use_container_width=True,
     hide_index=True,
@@ -200,7 +251,7 @@ if not calc_df.empty:
     else:
         st.error(f"Gain / Loss: {fmt_money(gain_loss)}")
 else:
-    st.info("Enter your real holdings above to calculate portfolio value, income, and gain/loss.")
+    st.info("Portfolio is blank. Add your real holdings above.")
 
 st.subheader("Goal Progress")
 st.progress(min(max(goal_progress / 100.0, 0.0), 1.0))

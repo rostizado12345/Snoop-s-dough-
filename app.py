@@ -14,13 +14,6 @@ st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵",
 GOAL_MONTHLY = 8000.0
 DEFAULT_TOTAL_INVESTED = 295000.0
 
-DEFAULT_ROWS = [
-    {"Ticker": "SPYI", "Shares": 1000.0, "Price": 50.0, "Yield %": 12.0, "Use Live Price": True},
-    {"Ticker": "QQQI", "Shares": 800.0, "Price": 45.0, "Yield %": 14.0, "Use Live Price": True},
-    {"Ticker": "DIVO", "Shares": 600.0, "Price": 40.0, "Yield %": 5.0, "Use Live Price": True},
-    {"Ticker": "SVOL", "Shares": 500.0, "Price": 25.0, "Yield %": 16.0, "Use Live Price": True},
-]
-
 TABLE_COLUMNS = ["Ticker", "Shares", "Price", "Yield %", "Use Live Price"]
 
 
@@ -28,7 +21,7 @@ def init_state() -> None:
     if "invested_amount" not in st.session_state:
         st.session_state.invested_amount = DEFAULT_TOTAL_INVESTED
     if "portfolio_df" not in st.session_state:
-        st.session_state.portfolio_df = pd.DataFrame(DEFAULT_ROWS)[TABLE_COLUMNS]
+        st.session_state.portfolio_df = pd.DataFrame(columns=TABLE_COLUMNS)
     if "last_live_refresh" not in st.session_state:
         st.session_state.last_live_refresh = "Not refreshed yet"
 
@@ -201,10 +194,13 @@ m2.metric("Portfolio Value", fmt_money(portfolio_value))
 m3.metric("Monthly Income", fmt_money(monthly_income))
 m4.metric("Annual Income", fmt_money(annual_income))
 
-if gain_loss >= 0:
-    st.success(f"Gain / Loss: {fmt_money(gain_loss)}")
+if not calc_df.empty:
+    if gain_loss >= 0:
+        st.success(f"Gain / Loss: {fmt_money(gain_loss)}")
+    else:
+        st.error(f"Gain / Loss: {fmt_money(gain_loss)}")
 else:
-    st.error(f"Gain / Loss: {fmt_money(gain_loss)}")
+    st.info("Enter your real holdings above to calculate portfolio value, income, and gain/loss.")
 
 st.subheader("Goal Progress")
 st.progress(min(max(goal_progress / 100.0, 0.0), 1.0))

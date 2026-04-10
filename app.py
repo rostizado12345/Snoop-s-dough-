@@ -15,7 +15,7 @@ st.set_page_config(
     layout="wide",
 )
 
-GOAL_MONTHLY = 8000
+GOAL_MONTHLY = 8000.0
 DEFAULT_TOTAL_INVESTED = 295090.0
 
 DEFAULT_COLUMNS = [
@@ -31,322 +31,473 @@ DEFAULT_COLUMNS = [
 ]
 
 DEFAULT_ROWS = [
-    ["GDXY", 2671.718, 13.25, 0.15, 3.00, "", "monthly", "all", "Primary income engine"],
-    ["CHPY", 315.648, 56.08, 0.06, 3.36, "", "monthly", "all", "Primary income engine"],
-    ["FEPI", 369.674, 39.90, 0.07, 4.80, "", "monthly", "all", "Primary income engine"],
-    ["QQQI", 413.413, 49.95, 0.10, 4.56, "", "monthly", "all", "Primary income engine"],
-    ["AIPI", 433.250, 34.05, 0.05, 4.20, "", "monthly", "all", "Primary income engine"],
-    ["SPYI", 895.295, 49.43, 0.12, 5.64, "", "monthly", "all", "Core stabilizer"],
-    ["SVOL", 1338.302, 15.43, 0.06, 1.92, "", "monthly", "all", "Core stabilizer"],
-    ["DIVO", 853.930, 44.91, 0.10, 1.80, "", "quarterly", "3,6,9,12", "Core stabilizer"],
-    ["IYRI", 314.264, 46.93, 0.05, 1.56, "", "quarterly", "3,6,9,12", "Diversifier"],
-    ["IWMI", 247.328, 47.71, 0.04, 2.64, "", "monthly", "all", "Diversifier"],
-    ["IAU", 141.249, 83.54, 0.04, 0.00, "", "none", "", "Gold hedge"],
-    ["MLPI", 206.257, 57.21, 0.04, 3.60, "", "quarterly", "2,5,8,11", "Diversifier"],
-    ["TLTW", 918.594, 22.48, 0.07, 2.64, "", "monthly", "all", "Shock absorber"],
-    ["FDRXX", 17700.220, 1.00, 0.05, 0.045, 1.00, "monthly", "all", "Cash core / manual price"],
+    ["GDXY", 2671.718, 13.38, 0.15, 2.64, None, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", "Primary income engine"],
+    ["CHPY", 1155.000, 24.25, 0.06, 1.80, None, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", "Income layer"],
+    ["FEPI", 1330.000, 22.40, 0.07, 1.92, None, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", "Income layer"],
+    ["QQQI", 1740.000, 18.90, 0.10, 1.68, None, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", "Income layer"],
+    ["AIPI", 820.000, 39.75, 0.05, 2.10, None, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", "Primary income engine"],
+    ["SPYI", 1350.000, 47.10, 0.12, 5.88, None, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", "Core priority add"],
+    ["SVOL", 1200.000, 22.85, 0.06, 1.92, None, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", "Volatility income"],
+    ["DIVO", 880.000, 38.40, 0.10, 2.40, None, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", "Core priority add"],
+    ["IYRI", 500.000, 24.10, 0.05, 1.12, None, "quarterly", "3,6,9,12", "REIT diversifier"],
+    ["IWMI", 620.000, 18.25, 0.04, 1.08, None, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", "Small cap income"],
+    ["IAU", 300.000, 44.00, 0.04, 0.00, None, "none", "", "Gold hedge"],
+    ["MLPI", 410.000, 48.15, 0.04, 3.20, None, "quarterly", "2,5,8,11", "MLP income"],
+    ["TLTW", 760.000, 26.50, 0.07, 2.88, None, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", "Shock absorber"],
+    ["FDRXX", 17000.000, 1.00, 0.05, 0.045, 1.00, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", "Cash sweep / dry powder"],
 ]
 
 
-def load_default_df() -> pd.DataFrame:
+def safe_float(value, default=0.0):
+    try:
+        if value is None or value == "":
+            return float(default)
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def safe_text(value, default=""):
+    if value is None:
+        return default
+    return str(value)
+
+
+def parse_months(text):
+    if text is None:
+        return []
+    text = str(text).strip()
+    if not text:
+        return []
+    months = []
+    for part in text.split(","):
+        part = part.strip()
+        if part.isdigit():
+            m = int(part)
+            if 1 <= m <= 12:
+                months.append(m)
+    return sorted(list(set(months)))
+
+
+def load_default_df():
     return pd.DataFrame(DEFAULT_ROWS, columns=DEFAULT_COLUMNS)
 
 
-@st.cache_data(ttl=900)
-def fetch_market_data(tickers: tuple[str, ...]) -> pd.DataFrame:
+def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    for col in DEFAULT_COLUMNS:
+        if col not in df.columns:
+            df[col] = None
+
+    df = df[DEFAULT_COLUMNS]
+
+    numeric_cols = [
+        "shares",
+        "cost_basis_per_share",
+        "target_weight",
+        "annual_income_per_share",
+        "manual_price",
+    ]
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df["ticker"] = df["ticker"].astype(str).str.upper().str.strip()
+    df["payout_frequency"] = df["payout_frequency"].fillna("monthly").astype(str).str.lower().str.strip()
+    df["payout_months"] = df["payout_months"].fillna("").astype(str)
+    df["notes"] = df["notes"].fillna("").astype(str)
+
+    df = df[df["ticker"] != ""].reset_index(drop=True)
+    return df
+
+
+def get_live_prices(tickers: List[str]) -> Dict[str, float]:
+    prices = {}
     if yf is None or not tickers:
-        return pd.DataFrame(columns=["ticker", "price", "prev_close"])
+        return prices
 
-    records = []
-    for ticker in tickers:
-        try:
-            tk = yf.Ticker(ticker)
-            info = tk.fast_info
-            price = info.get("lastPrice") or info.get("regularMarketPrice")
-            prev_close = info.get("previousClose")
-            if price is None:
-                hist = tk.history(period="5d")
-                if not hist.empty:
-                    price = float(hist["Close"].iloc[-1])
-                    prev_close = float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
-            records.append({"ticker": ticker, "price": price, "prev_close": prev_close})
-        except Exception:
-            records.append({"ticker": ticker, "price": None, "prev_close": None})
-    return pd.DataFrame(records)
+    clean = [t for t in tickers if t and t.upper() != "FDRXX"]
+    if not clean:
+        return prices
 
+    try:
+        data = yf.download(
+            tickers=clean,
+            period="5d",
+            interval="1d",
+            auto_adjust=False,
+            progress=False,
+            group_by="ticker",
+            threads=True,
+        )
 
-MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        if len(clean) == 1:
+            ticker = clean[0]
+            try:
+                px = float(data["Close"].dropna().iloc[-1])
+                prices[ticker] = px
+            except Exception:
+                pass
+        else:
+            for ticker in clean:
+                try:
+                    px = float(data[ticker]["Close"].dropna().iloc[-1])
+                    prices[ticker] = px
+                except Exception:
+                    pass
+    except Exception:
+        return prices
 
-
-def parse_months(text: str) -> List[int]:
-    if not isinstance(text, str) or not text.strip():
-        return []
-    val = text.strip().lower()
-    if val == "all":
-        return list(range(1, 13))
-    months = []
-    for piece in val.split(","):
-        piece = piece.strip()
-        if piece.isdigit():
-            num = int(piece)
-            if 1 <= num <= 12:
-                months.append(num)
-    return sorted(set(months))
+    return prices
 
 
-def distribute_income(row: pd.Series) -> Dict[int, float]:
-    annual = float(row.get("estimated_annual_income", 0) or 0)
-    freq = str(row.get("payout_frequency", "monthly") or "monthly").strip().lower()
-    months = parse_months(str(row.get("payout_months", "all") or "all"))
-    if annual <= 0:
-        return {m: 0.0 for m in range(1, 13)}
-    if freq == "none":
-        return {m: 0.0 for m in range(1, 13)}
-    if not months:
-        months = list(range(1, 13)) if freq == "monthly" else [3, 6, 9, 12]
-    per_month = annual / len(months)
-    out = {m: 0.0 for m in range(1, 13)}
-    for m in months:
-        out[m] += per_month
-    return out
+def compute_portfolio(df: pd.DataFrame):
+    df = df.copy()
+
+    live_prices = get_live_prices(df["ticker"].tolist())
+    resolved_prices = []
+
+    for _, row in df.iterrows():
+        ticker = row["ticker"]
+        manual_price = row["manual_price"]
+
+        if pd.notna(manual_price) and safe_float(manual_price, 0) > 0:
+            resolved_prices.append(float(manual_price))
+        elif ticker in live_prices:
+            resolved_prices.append(float(live_prices[ticker]))
+        elif ticker == "FDRXX":
+            resolved_prices.append(1.00)
+        else:
+            resolved_prices.append(float(row["cost_basis_per_share"]) if pd.notna(row["cost_basis_per_share"]) else 0.0)
+
+    df["price"] = resolved_prices
+    df["shares"] = df["shares"].fillna(0.0)
+    df["cost_basis_per_share"] = df["cost_basis_per_share"].fillna(0.0)
+    df["target_weight"] = df["target_weight"].fillna(0.0)
+    df["annual_income_per_share"] = df["annual_income_per_share"].fillna(0.0)
+
+    df["market_value"] = df["shares"] * df["price"]
+    df["cost_basis_total"] = df["shares"] * df["cost_basis_per_share"]
+    df["gain_loss"] = df["market_value"] - df["cost_basis_total"]
+    total_value = float(df["market_value"].sum())
+    df["actual_weight"] = df["market_value"] / total_value if total_value > 0 else 0.0
+    df["annual_income"] = df["shares"] * df["annual_income_per_share"]
+    df["monthly_income_est"] = df["annual_income"] / 12.0
+    return df
 
 
-def build_portfolio(df: pd.DataFrame) -> pd.DataFrame:
-    work = df.copy()
-    for col in ["shares", "cost_basis_per_share", "target_weight", "annual_income_per_share", "manual_price"]:
-        work[col] = pd.to_numeric(work[col], errors="coerce")
+def build_rebalance_table(df: pd.DataFrame, new_money: float):
+    rebal = df.copy()
+    total_value = float(rebal["market_value"].sum())
+    future_total = total_value + float(new_money)
 
-    work["ticker"] = work["ticker"].astype(str).str.upper().str.strip()
-    market_tickers = tuple(sorted([t for t in work["ticker"].dropna().unique() if t and t != "FDRXX"]))
-    market = fetch_market_data(market_tickers)
-    work = work.merge(market, on="ticker", how="left")
-    work["used_price"] = work["manual_price"].where(
-        work["manual_price"].notna() & (work["manual_price"] > 0),
-        work["price"],
-    )
-    work["used_price"] = work["used_price"].fillna(0)
-    work["prev_close"] = work["prev_close"].fillna(work["used_price"])
-    work["market_value"] = work["shares"].fillna(0) * work["used_price"]
-    work["cost_total"] = work["shares"].fillna(0) * work["cost_basis_per_share"].fillna(0)
-    work["gain_loss"] = work["market_value"] - work["cost_total"]
-    work["day_change_value"] = work["shares"].fillna(0) * (work["used_price"] - work["prev_close"])
-    total_value = float(work["market_value"].sum())
-    work["actual_weight"] = work["market_value"] / total_value if total_value else 0
-    work["weight_gap"] = work["actual_weight"] - work["target_weight"].fillna(0)
-    work["target_value"] = work["target_weight"].fillna(0) * total_value
-    work["rebalance_delta_value"] = work["target_value"] - work["market_value"]
-    work["estimated_annual_income"] = work["shares"].fillna(0) * work["annual_income_per_share"].fillna(0)
-    work["estimated_monthly_income"] = work["estimated_annual_income"] / 12
-    work["shares_to_target"] = work.apply(
-        lambda r: (r["rebalance_delta_value"] / r["used_price"]) if r["used_price"] else 0,
+    rebal["target_value_now"] = rebal["target_weight"] * total_value
+    rebal["target_value_with_new_money"] = rebal["target_weight"] * future_total
+    rebal["current_gap"] = rebal["target_value_now"] - rebal["market_value"]
+    rebal["rebalance_dollars"] = rebal["target_value_with_new_money"] - rebal["market_value"]
+    rebal["rebalance_dollars"] = rebal["rebalance_dollars"].apply(lambda x: max(0.0, float(x)))
+    rebal["shares_to_buy"] = rebal.apply(
+        lambda row: (row["rebalance_dollars"] / row["price"]) if row["price"] > 0 else 0.0,
         axis=1,
     )
-    return work
+
+    total_needed = float(rebal["rebalance_dollars"].sum())
+    if total_needed > 0 and new_money > 0:
+        scale = min(1.0, new_money / total_needed)
+        rebal["buy_now_dollars"] = rebal["rebalance_dollars"] * scale
+        rebal["buy_now_shares"] = rebal.apply(
+            lambda row: (row["buy_now_dollars"] / row["price"]) if row["price"] > 0 else 0.0,
+            axis=1,
+        )
+    else:
+        rebal["buy_now_dollars"] = 0.0
+        rebal["buy_now_shares"] = 0.0
+
+    return rebal
 
 
-def build_income_calendar(portfolio: pd.DataFrame) -> pd.DataFrame:
+def build_monthly_income_calendar(df: pd.DataFrame):
+    month_names = {
+        1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr",
+        5: "May", 6: "Jun", 7: "Jul", 8: "Aug",
+        9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec",
+    }
+
     rows = []
-    for month_num, month_name in enumerate(MONTH_NAMES, start=1):
-        est = 0.0
-        for _, row in portfolio.iterrows():
-            est += distribute_income(row)[month_num]
-        rows.append({"Month": month_name, "Estimated paycheck": est})
+    for month in range(1, 13):
+        total = 0.0
+        details = []
+        for _, row in df.iterrows():
+            months = parse_months(row["payout_months"])
+            freq = safe_text(row["payout_frequency"], "monthly").lower()
+            annual_income = safe_float(row["annual_income"], 0.0)
+
+            if freq == "none" or annual_income <= 0:
+                continue
+
+            if freq == "monthly":
+                amt = annual_income / 12.0
+                total += amt
+                details.append(f'{row["ticker"]}: ${amt:,.0f}')
+            elif month in months and len(months) > 0:
+                amt = annual_income / len(months)
+                total += amt
+                details.append(f'{row["ticker"]}: ${amt:,.0f}')
+
+        rows.append({
+            "Month": month_names[month],
+            "Estimated Income": total,
+            "Details": " | ".join(details) if details else "-",
+        })
+
     return pd.DataFrame(rows)
 
 
-def money(x: float) -> str:
+def format_money(x):
     return f"${x:,.0f}"
 
 
-def money2(x: float) -> str:
+def format_money_2(x):
     return f"${x:,.2f}"
 
 
-def pct(x: float) -> str:
-    return f"{x * 100:,.1f}%"
+def priority_bucket(ticker: str) -> str:
+    ticker = str(ticker).upper().strip()
+    if ticker in ["SPYI", "DIVO"]:
+        return "Priority 1"
+    if ticker in ["FEPI", "QQQI"]:
+        return "Priority 2"
+    if ticker in ["SVOL"]:
+        return "Priority 3"
+    if ticker in ["GDXY", "IAU"]:
+        return "Lower priority"
+    return "Other"
 
 
-st.title("💵 Retirement Paycheck Dashboard")
-st.caption("Income first. Portfolio second. iPhone-friendly layout.")
-
-if "quick_cash" not in st.session_state:
-    st.session_state.quick_cash = 0.0
+if "portfolio_df" not in st.session_state:
+    st.session_state.portfolio_df = load_default_df()
 
 if "total_invested" not in st.session_state:
     st.session_state.total_invested = DEFAULT_TOTAL_INVESTED
 
-if "manual_total_invested" not in st.session_state:
-    st.session_state.manual_total_invested = DEFAULT_TOTAL_INVESTED
+st.title("💵 Retirement Paycheck Dashboard")
+st.caption("Income-first portfolio tracker with editable invested amount, live prices, and add-only rebalance helper.")
 
 with st.sidebar:
-    st.header("Your setup")
-    st.write("Edit positions here or upload a CSV.")
+    st.header("Settings")
 
-    uploaded = st.file_uploader("Upload portfolio CSV", type=["csv"])
-    if uploaded is not None:
-        user_df = pd.read_csv(uploaded)
-    else:
-        user_df = load_default_df()
-
-    st.download_button(
-        "Download template CSV",
-        load_default_df().to_csv(index=False).encode("utf-8"),
-        file_name="retirement_paycheck_template.csv",
-        mime="text/csv",
-    )
-
-    st.info(
-        "Prices come from Yahoo Finance where available. Cash-like positions such as FDRXX use manual price. "
-        "Income and payout schedules are editable estimates."
-    )
-
-    st.divider()
-    st.subheader("Invested amount")
-    st.caption("Use this to track total money you have contributed, so cash deposits do not look like fake gains.")
-
-    invest_q1, invest_q2, invest_q3, invest_q4 = st.columns(4)
-    if invest_q1.button("+1k", use_container_width=True, key="invest_add_1k"):
-        st.session_state.total_invested += 1000.0
-        st.session_state.manual_total_invested = st.session_state.total_invested
-    if invest_q2.button("+5k", use_container_width=True, key="invest_add_5k"):
-        st.session_state.total_invested += 5000.0
-        st.session_state.manual_total_invested = st.session_state.total_invested
-    if invest_q3.button("+10k", use_container_width=True, key="invest_add_10k"):
-        st.session_state.total_invested += 10000.0
-        st.session_state.manual_total_invested = st.session_state.total_invested
-    if invest_q4.button("Reset", use_container_width=True, key="invest_reset"):
+    if st.button("Reset portfolio to default"):
+        st.session_state.portfolio_df = load_default_df()
         st.session_state.total_invested = DEFAULT_TOTAL_INVESTED
-        st.session_state.manual_total_invested = DEFAULT_TOTAL_INVESTED
+        st.success("Portfolio reset to default values.")
 
-    st.number_input(
-        "Edit total invested",
+    st.subheader("Portfolio cash flow")
+    new_money = st.number_input(
+        "New money to deploy",
         min_value=0.0,
-        step=1000.0,
-        key="manual_total_invested",
-        help="This is your contribution total, not your market value.",
+        value=0.0,
+        step=100.0,
+        help="Use this for add-only rebalancing suggestions.",
     )
 
-    if st.button("Apply edited total invested", use_container_width=True, key="apply_total_invested"):
-        st.session_state.total_invested = float(st.session_state.manual_total_invested)
-        st.rerun()
+    st.subheader("Goal")
+    goal_monthly = st.number_input(
+        "Monthly income goal",
+        min_value=0.0,
+        value=float(GOAL_MONTHLY),
+        step=100.0,
+    )
 
+st.subheader("Total invested")
+c1, c2 = st.columns([1, 2])
+
+with c1:
+    edited_total_invested = st.number_input(
+        "Edit total invested amount",
+        min_value=0.0,
+        value=float(st.session_state.total_invested),
+        step=100.0,
+        help="Use this to track deposits/additions so cash positions are not treated like gains.",
+    )
+
+with c2:
+    st.info(
+        "This is your money contributed/invested basis for the full portfolio. "
+        "Change it here anytime you add money, instead of editing code."
+    )
+
+st.session_state.total_invested = float(edited_total_invested)
+
+st.subheader("Positions")
 edited_df = st.data_editor(
-    user_df,
-    use_container_width=True,
+    st.session_state.portfolio_df,
     num_rows="dynamic",
-    hide_index=True,
+    use_container_width=True,
+    key="portfolio_editor",
     column_config={
         "ticker": st.column_config.TextColumn("Ticker"),
-        "shares": st.column_config.NumberColumn("Shares", step=0.001, format="%.3f"),
-        "cost_basis_per_share": st.column_config.NumberColumn("Cost/Share", step=0.01, format="%.2f"),
-        "target_weight": st.column_config.NumberColumn("Target Wt", step=0.01, format="%.4f"),
-        "annual_income_per_share": st.column_config.NumberColumn("Annual Income/Share", step=0.01, format="%.2f"),
-        "manual_price": st.column_config.NumberColumn("Manual Price", step=0.01, format="%.2f"),
-        "payout_frequency": st.column_config.SelectboxColumn("Payout Freq", options=["monthly", "quarterly", "none"]),
+        "shares": st.column_config.NumberColumn("Shares", format="%.4f"),
+        "cost_basis_per_share": st.column_config.NumberColumn("Cost Basis/Share", format="%.4f"),
+        "target_weight": st.column_config.NumberColumn("Target Weight", format="%.4f"),
+        "annual_income_per_share": st.column_config.NumberColumn("Annual Income/Share", format="%.4f"),
+        "manual_price": st.column_config.NumberColumn("Manual Price", format="%.4f"),
+        "payout_frequency": st.column_config.TextColumn("Payout Frequency"),
         "payout_months": st.column_config.TextColumn("Payout Months"),
         "notes": st.column_config.TextColumn("Notes"),
     },
 )
 
-portfolio = build_portfolio(edited_df)
-calendar_df = build_income_calendar(portfolio)
+df = normalize_df(pd.DataFrame(edited_df))
+st.session_state.portfolio_df = df
+
+portfolio = compute_portfolio(df)
 
 total_value = float(portfolio["market_value"].sum())
-holdings_cost_gain = float(portfolio["gain_loss"].sum())
-day_change = float(portfolio["day_change_value"].sum())
-monthly_income = float(portfolio["estimated_monthly_income"].sum())
-annual_income = float(portfolio["estimated_annual_income"].sum())
-progress = (monthly_income / GOAL_MONTHLY) if GOAL_MONTHLY else 0
-next_pay_month = calendar_df.sort_values("Estimated paycheck", ascending=False).iloc[0]["Month"] if not calendar_df.empty else "N/A"
+total_cost_basis = float(portfolio["cost_basis_total"].sum())
+market_gain = total_value - total_cost_basis
+net_gain_vs_invested = total_value - float(st.session_state.total_invested)
+annual_income = float(portfolio["annual_income"].sum())
+monthly_income = annual_income / 12.0
+income_goal_pct = (monthly_income / goal_monthly * 100.0) if goal_monthly > 0 else 0.0
 
-total_invested = float(st.session_state.total_invested)
-true_portfolio_gain = total_value - total_invested
-true_gain_pct = (true_portfolio_gain / total_invested) if total_invested > 0 else 0.0
+m1, m2, m3, m4, m5 = st.columns(5)
+m1.metric("Portfolio Value", format_money(total_value))
+m2.metric("Total Invested", format_money(st.session_state.total_invested))
+m3.metric("Gain vs Invested", format_money(net_gain_vs_invested))
+m4.metric("Est. Monthly Income", format_money(monthly_income))
+m5.metric("% of Goal", f"{income_goal_pct:,.1f}%")
 
-st.subheader("Your Paycheck")
-col1, col2 = st.columns(2)
-col1.metric("Estimated monthly income", money(monthly_income), delta=f"Goal progress: {progress * 100:,.0f}%")
-col2.metric("Income goal", money(GOAL_MONTHLY), delta=f"Gap: {money(monthly_income - GOAL_MONTHLY)}")
+with st.expander("Portfolio summary table", expanded=True):
+    summary = portfolio.copy()
+    summary["Priority"] = summary["ticker"].apply(priority_bucket)
+    summary = summary[
+        [
+            "ticker",
+            "shares",
+            "price",
+            "market_value",
+            "cost_basis_total",
+            "gain_loss",
+            "actual_weight",
+            "target_weight",
+            "annual_income",
+            "monthly_income_est",
+            "Priority",
+            "notes",
+        ]
+    ].sort_values(by="market_value", ascending=False)
 
-st.progress(min(max(progress, 0.0), 1.0), text=f"Monthly income progress toward {money(GOAL_MONTHLY)}")
+    styled = summary.copy()
+    styled["price"] = styled["price"].map(format_money_2)
+    styled["market_value"] = styled["market_value"].map(format_money)
+    styled["cost_basis_total"] = styled["cost_basis_total"].map(format_money)
+    styled["gain_loss"] = styled["gain_loss"].map(format_money)
+    styled["actual_weight"] = styled["actual_weight"].map(lambda x: f"{x*100:,.2f}%")
+    styled["target_weight"] = styled["target_weight"].map(lambda x: f"{x*100:,.2f}%")
+    styled["annual_income"] = styled["annual_income"].map(format_money)
+    styled["monthly_income_est"] = styled["monthly_income_est"].map(format_money)
+    st.dataframe(styled, use_container_width=True, hide_index=True)
 
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Current portfolio value", money(total_value))
-m2.metric("Today's move", money(day_change))
-m3.metric("True portfolio gain/loss", money(true_portfolio_gain), delta=f"{true_gain_pct * 100:,.2f}%")
-m4.metric("Highest payout month", next_pay_month, delta=money(float(calendar_df["Estimated paycheck"].max()) if not calendar_df.empty else 0))
+st.subheader("Add-only rebalance helper")
+rebal = build_rebalance_table(portfolio, new_money)
 
-mini1, mini2 = st.columns(2)
-mini1.metric("Total invested", money(total_invested))
-mini2.metric("Holdings cost-basis gain/loss", money(holdings_cost_gain))
+if not rebal.empty:
+    rebalance_col = None
+    for candidate in [
+        "buy_now_dollars",
+        "rebalance_dollars",
+        "rebalance_amount",
+        "rebalance_needed",
+        "rebalance_gap",
+        "rebalance",
+    ]:
+        if candidate in rebal.columns:
+            rebalance_col = candidate
+            break
+
+    if rebalance_col is None:
+        st.warning("Could not find a rebalance column in the table.")
+        underweights = pd.DataFrame()
+    else:
+        underweights = rebal[rebal[rebalance_col] > 0].copy()
+        underweights = underweights.sort_values(by=rebalance_col, ascending=False)
+else:
+    underweights = pd.DataFrame()
+
+if new_money <= 0:
+    st.info("Enter an amount in 'New money to deploy' in the sidebar to see buy suggestions.")
+else:
+    if underweights.empty:
+        st.success("No underweight positions found based on your target weights.")
+    else:
+        rebalance_view = underweights[
+            [
+                "ticker",
+                "price",
+                "market_value",
+                "actual_weight",
+                "target_weight",
+                "rebalance_dollars",
+                "shares_to_buy",
+                "buy_now_dollars",
+                "buy_now_shares",
+            ]
+        ].copy()
+
+        rebalance_view["Priority"] = rebalance_view["ticker"].apply(priority_bucket)
+        rebalance_view = rebalance_view.sort_values(by="buy_now_dollars", ascending=False)
+
+        shown = rebalance_view.copy()
+        shown["price"] = shown["price"].map(format_money_2)
+        shown["market_value"] = shown["market_value"].map(format_money)
+        shown["actual_weight"] = shown["actual_weight"].map(lambda x: f"{x*100:,.2f}%")
+        shown["target_weight"] = shown["target_weight"].map(lambda x: f"{x*100:,.2f}%")
+        shown["rebalance_dollars"] = shown["rebalance_dollars"].map(format_money)
+        shown["buy_now_dollars"] = shown["buy_now_dollars"].map(format_money)
+        shown["shares_to_buy"] = shown["shares_to_buy"].map(lambda x: f"{x:,.4f}")
+        shown["buy_now_shares"] = shown["buy_now_shares"].map(lambda x: f"{x:,.4f}")
+
+        st.dataframe(shown, use_container_width=True, hide_index=True)
+
+        top_buys = rebalance_view[rebalance_view["buy_now_dollars"] > 0].head(8)
+        if not top_buys.empty:
+            bullets = []
+            for _, row in top_buys.iterrows():
+                bullets.append(
+                    f'- {row["ticker"]}: {format_money(row["buy_now_dollars"])} '
+                    f'(~{row["buy_now_shares"]:,.2f} shares)'
+                )
+            st.markdown("**Suggested buys with your new money:**")
+            st.markdown("\n".join(bullets))
+
+st.subheader("Income calendar")
+calendar_df = build_monthly_income_calendar(portfolio)
+calendar_show = calendar_df.copy()
+calendar_show["Estimated Income"] = calendar_show["Estimated Income"].map(format_money)
+st.dataframe(calendar_show, use_container_width=True, hide_index=True)
+
+st.subheader("Quick health check")
+h1, h2, h3 = st.columns(3)
+
+with h1:
+    st.markdown("**Income snapshot**")
+    st.write(f"Estimated annual income: {format_money(annual_income)}")
+    st.write(f"Estimated monthly income: {format_money(monthly_income)}")
+    st.write(f"Income goal progress: {income_goal_pct:,.1f}%")
+
+with h2:
+    st.markdown("**Portfolio snapshot**")
+    st.write(f"Market value: {format_money(total_value)}")
+    st.write(f"Cost basis from positions: {format_money(total_cost_basis)}")
+    st.write(f"Gain/loss from position basis: {format_money(market_gain)}")
+
+with h3:
+    st.markdown("**Tracking snapshot**")
+    st.write(f"Manual total invested: {format_money(st.session_state.total_invested)}")
+    st.write(f"Gain/loss vs invested: {format_money(net_gain_vs_invested)}")
+    st.write("Cash additions should be reflected by editing Total Invested above.")
 
 st.divider()
-
-left, right = st.columns([1.1, 1])
-with left:
-    st.subheader("Paycheck by holding")
-    income_view = portfolio[["ticker", "estimated_monthly_income", "estimated_annual_income", "market_value", "payout_frequency"]].copy()
-    income_view = income_view.sort_values("estimated_monthly_income", ascending=False)
-    income_view["estimated_monthly_income"] = income_view["estimated_monthly_income"].map(money)
-    income_view["estimated_annual_income"] = income_view["estimated_annual_income"].map(money)
-    income_view["market_value"] = income_view["market_value"].map(money)
-    st.dataframe(income_view, use_container_width=True, hide_index=True)
-
-with right:
-    st.subheader("Estimated paycheck calendar")
-    st.bar_chart(calendar_df.set_index("Month"))
-    st.caption("This version uses editable monthly and quarterly payout timing so bonus months show up instead of a flat 12-month average.")
-
-st.divider()
-
-st.subheader("Rebalance helper")
-rb1, rb2 = st.columns([1, 1.3])
-
-with rb1:
-    st.caption("Quick add-cash buttons")
-
-    qb1, qb2, qb3, qb4 = st.columns(4)
-
-    if qb1.button("+1k", use_container_width=True, key="cash_1k"):
-        st.session_state.quick_cash = float(st.session_state.get("quick_cash", 0.0)) + 1000.0
-
-    if qb2.button("+5k", use_container_width=True, key="cash_5k"):
-        st.session_state.quick_cash = float(st.session_state.get("quick_cash", 0.0)) + 5000.0
-
-    if qb3.button("+10k", use_container_width=True, key="cash_10k"):
-        st.session_state.quick_cash = float(st.session_state.get("quick_cash", 0.0)) + 10000.0
-
-    if qb4.button("Clear", use_container_width=True, key="cash_clear"):
-        st.session_state.quick_cash = 0.0
-
-    new_cash = st.number_input(
-        "New cash to invest",
-        min_value=0.0,
-        step=1000.0,
-        key="quick_cash",
-        help="Type any amount you want, or use the quick-add buttons above.",
-    )
-
-    if st.button("Add this cash to total invested", use_container_width=True):
-        st.session_state.total_invested += float(new_cash)
-        st.session_state.manual_total_invested = st.session_state.total_invested
-        st.session_state.quick_cash = 0.0
-        st.rerun()
-
-    threshold_pct = st.slider(
-        "Only show weight gaps bigger than",
-        min_value=0.0,
-        max_value=5.0,
-        value=0.5,
-        step=0.1,
-    )
-    threshold = threshold_pct / 100
-
-rebal = portfolio[[
-    "ticker", "market_value", "target_value", "rebalance_delta_value", "shares_to_target",
-    "actual_weight", "target_weight", "weight_gap", "used_price"
-]].copy()
-rebal = rebal[rebal["ticker"].str.len() > 0].copy()
-rebal["Action"] = rebal["rebalance_delta_value"].apply(lambda x: "Buy" if x > 0 else ("Trim" if x < 0 else "Hold"))
-
-underweights = rebal[rebal["rebalance_delta_value"] > 0
+st.caption(
+    "Tip: when you add new money, update 'Total invested amount' so cash contributions "
+    "do not look like market gains."

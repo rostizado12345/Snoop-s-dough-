@@ -1,4 +1,3 @@
-
 import math
 from typing import Dict, List
 
@@ -176,8 +175,8 @@ if "quick_cash" not in st.session_state:
 if "total_invested" not in st.session_state:
     st.session_state.total_invested = DEFAULT_TOTAL_INVESTED
 
-if "contribution_input" not in st.session_state:
-    st.session_state.contribution_input = 0.0
+if "manual_total_invested" not in st.session_state:
+    st.session_state.manual_total_invested = DEFAULT_TOTAL_INVESTED
 
 with st.sidebar:
     st.header("Your setup")
@@ -203,25 +202,33 @@ with st.sidebar:
 
     st.divider()
     st.subheader("Invested amount")
-    st.caption("Use this for total money you have added. This prevents cash deposits from showing up as fake gains.")
+    st.caption("Use this to track total money you have contributed, so cash deposits do not look like fake gains.")
 
     invest_q1, invest_q2, invest_q3, invest_q4 = st.columns(4)
-    if invest_q1.button("+10k", use_container_width=True, key="invest_add_10k"):
+    if invest_q1.button("+1k", use_container_width=True, key="invest_add_1k"):
+        st.session_state.total_invested += 1000.0
+        st.session_state.manual_total_invested = st.session_state.total_invested
+    if invest_q2.button("+5k", use_container_width=True, key="invest_add_5k"):
+        st.session_state.total_invested += 5000.0
+        st.session_state.manual_total_invested = st.session_state.total_invested
+    if invest_q3.button("+10k", use_container_width=True, key="invest_add_10k"):
         st.session_state.total_invested += 10000.0
-    if invest_q2.button("+25k", use_container_width=True, key="invest_add_25k"):
-        st.session_state.total_invested += 25000.0
-    if invest_q3.button("+50k", use_container_width=True, key="invest_add_50k"):
-        st.session_state.total_invested += 50000.0
+        st.session_state.manual_total_invested = st.session_state.total_invested
     if invest_q4.button("Reset", use_container_width=True, key="invest_reset"):
         st.session_state.total_invested = DEFAULT_TOTAL_INVESTED
+        st.session_state.manual_total_invested = DEFAULT_TOTAL_INVESTED
 
     st.number_input(
         "Edit total invested",
         min_value=0.0,
         step=1000.0,
-        key="total_invested",
+        key="manual_total_invested",
         help="This is your contribution total, not your market value.",
     )
+
+    if st.button("Apply edited total invested", use_container_width=True, key="apply_total_invested"):
+        st.session_state.total_invested = float(st.session_state.manual_total_invested)
+        st.rerun()
 
 edited_df = st.data_editor(
     user_df,
@@ -297,27 +304,32 @@ rb1, rb2 = st.columns([1, 1.3])
 
 with rb1:
     st.caption("Quick add-cash buttons")
+
     qb1, qb2, qb3, qb4 = st.columns(4)
-    if qb1.button("+10k", use_container_width=True, key="cash_10k"):
-        st.session_state.quick_cash = 10000.0
-    if qb2.button("+25k", use_container_width=True, key="cash_25k"):
-        st.session_state.quick_cash = 25000.0
-    if qb3.button("+50k", use_container_width=True, key="cash_50k"):
-        st.session_state.quick_cash = 50000.0
+
+    if qb1.button("+1k", use_container_width=True, key="cash_1k"):
+        st.session_state.quick_cash = float(st.session_state.get("quick_cash", 0.0)) + 1000.0
+
+    if qb2.button("+5k", use_container_width=True, key="cash_5k"):
+        st.session_state.quick_cash = float(st.session_state.get("quick_cash", 0.0)) + 5000.0
+
+    if qb3.button("+10k", use_container_width=True, key="cash_10k"):
+        st.session_state.quick_cash = float(st.session_state.get("quick_cash", 0.0)) + 10000.0
+
     if qb4.button("Clear", use_container_width=True, key="cash_clear"):
         st.session_state.quick_cash = 0.0
 
     new_cash = st.number_input(
         "New cash to invest",
         min_value=0.0,
-        value=float(st.session_state.quick_cash),
         step=1000.0,
-        key="new_cash_input",
+        key="quick_cash",
+        help="Type any amount you want, or use the quick-add buttons above.",
     )
-    st.session_state.quick_cash = float(new_cash)
 
     if st.button("Add this cash to total invested", use_container_width=True):
         st.session_state.total_invested += float(new_cash)
+        st.session_state.manual_total_invested = st.session_state.total_invested
         st.session_state.quick_cash = 0.0
         st.rerun()
 
@@ -337,66 +349,4 @@ rebal = portfolio[[
 rebal = rebal[rebal["ticker"].str.len() > 0].copy()
 rebal["Action"] = rebal["rebalance_delta_value"].apply(lambda x: "Buy" if x > 0 else ("Trim" if x < 0 else "Hold"))
 
-underweights = rebal[rebal["rebalance_delta_value"] > 0].copy()
-if new_cash > 0 and not underweights.empty:
-    total_need = float(underweights["rebalance_delta_value"].sum())
-    alloc_factor = min(1.0, new_cash / total_need) if total_need > 0 else 0.0
-    underweights["cash_to_add"] = underweights["rebalance_delta_value"] * alloc_factor
-    underweights["shares_to_buy_with_cash"] = underweights.apply(
-        lambda r: (r["cash_to_add"] / r["used_price"]) if r["used_price"] else 0,
-        axis=1,
-    )
-    add_cash_view = underweights[["ticker", "cash_to_add", "shares_to_buy_with_cash", "actual_weight", "target_weight"]].copy()
-    add_cash_view = add_cash_view[add_cash_view["cash_to_add"] > 1].sort_values("cash_to_add", ascending=False)
-    add_cash_view["cash_to_add"] = add_cash_view["cash_to_add"].map(money)
-    add_cash_view["shares_to_buy_with_cash"] = add_cash_view["shares_to_buy_with_cash"].map(lambda x: f"{x:,.3f}")
-    add_cash_view["actual_weight"] = add_cash_view["actual_weight"].map(pct)
-    add_cash_view["target_weight"] = add_cash_view["target_weight"].map(pct)
-else:
-    add_cash_view = pd.DataFrame()
-
-rebal_filtered = rebal[rebal["weight_gap"].abs() >= threshold].copy().sort_values("rebalance_delta_value", ascending=False)
-rebal_view = rebal_filtered[["ticker", "actual_weight", "target_weight", "weight_gap", "rebalance_delta_value", "shares_to_target", "Action"]].copy()
-rebal_view["actual_weight"] = rebal_view["actual_weight"].map(pct)
-rebal_view["target_weight"] = rebal_view["target_weight"].map(pct)
-rebal_view["weight_gap"] = rebal_view["weight_gap"].map(pct)
-rebal_view["rebalance_delta_value"] = rebal_view["rebalance_delta_value"].map(money)
-rebal_view["shares_to_target"] = rebal_view["shares_to_target"].map(lambda x: f"{x:,.3f}")
-
-with rb2:
-    if new_cash > 0 and not add_cash_view.empty:
-        st.caption("Add-cash mode")
-        st.dataframe(add_cash_view, use_container_width=True, hide_index=True)
-    st.caption("Full rebalance mode")
-    st.dataframe(rebal_view, use_container_width=True, hide_index=True)
-
-st.divider()
-
-st.subheader("Holdings and allocation")
-holdings_view = portfolio[[
-    "ticker", "shares", "used_price", "market_value", "cost_basis_per_share", "gain_loss",
-    "target_weight", "actual_weight", "weight_gap", "payout_frequency", "payout_months", "notes"
-]].copy()
-
-for c in ["used_price", "market_value", "cost_basis_per_share", "gain_loss"]:
-    holdings_view[c] = holdings_view[c].map(money2)
-
-holdings_view["target_weight"] = holdings_view["target_weight"].map(pct)
-holdings_view["actual_weight"] = holdings_view["actual_weight"].map(pct)
-holdings_view["weight_gap"] = holdings_view["weight_gap"].map(pct)
-holdings_view["shares"] = holdings_view["shares"].map(lambda x: f"{x:,.3f}")
-
-st.dataframe(holdings_view, use_container_width=True, hide_index=True)
-
-st.divider()
-st.subheader("How to use updates")
-st.write(
-    "- Edit holdings in the table like before.\n"
-    "- Use 'Edit total invested' when you want to correct your total contribution number.\n"
-    "- Use 'Add this cash to total invested' when new money gets added to the account.\n"
-    "- Current portfolio value includes FDRXX and all other holdings.\n"
-    "- True portfolio gain/loss now compares current value against total invested, so deposits stop showing up as fake gains.\n"
-    "- Holdings cost-basis gain/loss is still shown separately for reference.\n"
-    "- The new cash box in Rebalance helper tells you where to add money without selling.\n"
-    "- Full rebalance mode shows the exact dollar amount and share count to buy or trim to get back to target."
-)
+underweights = rebal[rebal["rebalance_delta_value"] > 0

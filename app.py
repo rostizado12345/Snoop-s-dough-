@@ -50,6 +50,7 @@ MONTH_NAME_MAP = {
     7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
 }
 
+INCOME_EXCLUDED_TICKERS = {"FDRXX"}
 
 SAFE_MULTIPLIERS = {
     "AIPI": 0.75,
@@ -236,6 +237,10 @@ def get_realistic_multiplier(ticker: str) -> float:
     return REALISTIC_MULTIPLIERS.get(str(ticker).upper(), 0.90)
 
 
+def is_income_position(ticker: str) -> bool:
+    return str(ticker).upper() not in INCOME_EXCLUDED_TICKERS
+
+
 ensure_state()
 
 st.title("💵 Retirement Paycheck Dashboard")
@@ -348,7 +353,13 @@ portfolio_df["position_gain_loss"] = portfolio_df.apply(
     axis=1,
 )
 portfolio_df["actual_weight"] = 0.0
-portfolio_df["annual_income_actual"] = portfolio_df["market_value"] * portfolio_df["annual_yield"]
+
+portfolio_df["income_eligible"] = portfolio_df["ticker"].apply(is_income_position)
+
+portfolio_df["annual_income_actual"] = portfolio_df.apply(
+    lambda row: float(row["market_value"] * row["annual_yield"]) if bool(row["income_eligible"]) else 0.0,
+    axis=1,
+)
 portfolio_df["annual_income_realistic"] = portfolio_df.apply(
     lambda row: float(row["annual_income_actual"]) * get_realistic_multiplier(str(row["ticker"])),
     axis=1,
@@ -524,6 +535,7 @@ with st.expander("Important Notes"):
         """
 - **Position Gain / Loss** is calculated from each holding's own basis, much closer to Fidelity's logic.
 - **Cash / Sweep** in FDRXX is treated as cash, not profit.
+- **FDRXX is excluded from Safe / Realistic / Actual income calculations** so cash does not dilute the portfolio income view.
 - **Total Contributions** tracks money you added to the account.
 - **Net vs Contributions** is separate from **Position Gain / Loss** so deposits do not get mislabeled as market gains.
 - **Safe / Realistic / Actual** income tiers are shown separately so the app does not default to one optimistic number.

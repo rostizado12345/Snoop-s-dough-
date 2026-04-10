@@ -12,35 +12,37 @@ except Exception:
 st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵", layout="wide")
 
 GOAL_MONTHLY = 8000.0
-DEFAULT_TOTAL_INVESTED = 327000.0
-DEFAULT_PORTFOLIO_VALUE = 371522.97
-DEFAULT_CASH_SWEEP = 32000.0
+DEFAULT_TOTAL_CONTRIBUTIONS = 327000.0
 
 DEFAULT_COLUMNS = [
     "ticker",
+    "qty",
+    "avg_cost",
+    "manual_price",
     "target_weight",
     "annual_yield",
-    "manual_price",
     "payout_frequency",
     "payout_months",
     "notes",
 ]
 
+# Uses the real position quantities / basis values you surfaced from Fidelity,
+# with CHPY avg cost derived from its shown value and total gain/loss.
 DEFAULT_ROWS = [
-    ["GDXY", 15.0, 0.165, 14.58, "monthly", "all", ""],
-    ["CHPY", 6.0, 0.050, 61.01, "monthly", "all", ""],
-    ["FEPI", 7.0, 0.118, 51.75, "monthly", "all", ""],
-    ["QQQI", 10.0, 0.053, 51.94, "monthly", "all", ""],
-    ["AIPI", 5.0, 0.124, 33.79, "monthly", "all", ""],
-    ["SPYI", 12.0, 0.085, 51.11, "monthly", "all", ""],
-    ["DIVO", 10.0, 0.053, 45.53, "monthly", "all", ""],
-    ["SVOL", 6.0, 0.122, 15.75, "monthly", "all", ""],
-    ["TLTW", 6.0, 0.089, 22.48, "monthly", "all", ""],
-    ["IYRI", 4.0, 0.037, 48.84, "quarterly", "3,6,9,12", ""],
-    ["IWMI", 4.0, 0.080, 15.75, "monthly", "all", ""],
-    ["IAU", 4.0, 0.000, 55.20, "none", "none", ""],
-    ["MLPI", 4.0, 0.086, 25.10, "quarterly", "3,6,9,12", ""],
-    ["FDRXX", 7.0, 0.045, 1.00, "monthly", "all", "Cash / sweep"],
+    ["AIPI", 668.196, 34.05, 33.79, 5.0, 0.124, "monthly", "all", ""],
+    ["CHPY", 436.770, 60.2043356916, 61.01, 6.0, 0.050, "monthly", "all", "Basis inferred from value and G/L"],
+    ["DIVO", 857.354, 44.73, 45.53, 10.0, 0.053, "monthly", "all", ""],
+    ["FDRXX", 50690.280, 1.00, 1.00, 7.0, 0.045, "monthly", "all", "Cash / sweep"],
+    ["FEPI", 662.641, 40.37, 41.11, 7.0, 0.118, "monthly", "all", ""],
+    ["GDXY", 2698.805, 13.12, 14.58, 15.0, 0.165, "monthly", "all", ""],
+    ["IAU", 141.249, 83.54, 89.56, 4.0, 0.000, "none", "none", ""],
+    ["IWMI", 247.328, 47.71, 49.51, 4.0, 0.080, "monthly", "all", ""],
+    ["IYRI", 314.264, 46.93, 48.84, 4.0, 0.037, "quarterly", "3,6,9,12", ""],
+    ["MLPI", 206.257, 57.21, 56.13, 4.0, 0.086, "quarterly", "3,6,9,12", ""],
+    ["QQQI", 509.798, 50.31, 51.94, 10.0, 0.053, "monthly", "all", ""],
+    ["SPYI", 895.295, 49.43, 51.11, 12.0, 0.085, "monthly", "all", ""],
+    ["SVOL", 1338.302, 15.43, 15.75, 6.0, 0.122, "monthly", "all", ""],
+    ["TLTW", 927.268, 22.27, 22.48, 6.0, 0.089, "monthly", "all", ""],
 ]
 
 MONTH_NAME_MAP = {
@@ -56,12 +58,8 @@ def make_default_df() -> pd.DataFrame:
 def ensure_state() -> None:
     if "portfolio_df" not in st.session_state:
         st.session_state.portfolio_df = make_default_df()
-    if "total_invested" not in st.session_state:
-        st.session_state.total_invested = float(DEFAULT_TOTAL_INVESTED)
-    if "portfolio_value" not in st.session_state:
-        st.session_state.portfolio_value = float(DEFAULT_PORTFOLIO_VALUE)
-    if "cash_sweep" not in st.session_state:
-        st.session_state.cash_sweep = float(DEFAULT_CASH_SWEEP)
+    if "total_contributions" not in st.session_state:
+        st.session_state.total_contributions = float(DEFAULT_TOTAL_CONTRIBUTIONS)
 
 
 def clean_numeric(series: pd.Series, default: float = 0.0) -> pd.Series:
@@ -79,7 +77,7 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     for col in text_cols:
         df[col] = df[col].fillna("").astype(str)
 
-    numeric_cols = ["target_weight", "annual_yield", "manual_price"]
+    numeric_cols = ["qty", "avg_cost", "manual_price", "target_weight", "annual_yield"]
     for col in numeric_cols:
         df[col] = clean_numeric(df[col], 0.0)
 
@@ -95,7 +93,6 @@ def fetch_live_prices(tickers: List[str]) -> Dict[str, float]:
         return prices
 
     symbols = [t for t in tickers if t and t.upper() != "FDRXX"]
-
     if not symbols:
         return prices
 
@@ -125,7 +122,6 @@ def fetch_live_prices(tickers: List[str]) -> Dict[str, float]:
             close_series = history["Close"].dropna()
             if len(symbols) == 1 and not close_series.empty:
                 prices[symbols[0]] = float(close_series.iloc[-1])
-
     except Exception:
         return prices
 
@@ -137,7 +133,6 @@ def parse_months(text: str) -> List[int]:
 
     if raw in {"", "none", "nan"}:
         return []
-
     if raw == "all":
         return list(range(1, 13))
 
@@ -152,7 +147,6 @@ def parse_months(text: str) -> List[int]:
                 months.append(month_num)
         except Exception:
             continue
-
     return sorted(list(set(months)))
 
 
@@ -186,10 +180,11 @@ def monthly_income_schedule(df: pd.DataFrame) -> pd.DataFrame:
             for month in payout_months:
                 month_totals[month] += per_payment
 
+    ordered_months = list(range(1, 13))
     return pd.DataFrame(
         {
-            "Month": [MONTH_NAME_MAP[m] for m in range(1, 13)],
-            "Estimated Income": [month_totals[m] for m in range(1, 13)],
+            "Month": [MONTH_NAME_MAP[m] for m in ordered_months],
+            "Estimated Income": [month_totals[m] for m in ordered_months],
         }
     )
 
@@ -201,63 +196,66 @@ def currency(value: float) -> str:
 ensure_state()
 
 st.title("💵 Retirement Paycheck Dashboard")
-st.caption("Full dashboard with fixed sizing logic: based on total portfolio value instead of fake share counts.")
+st.caption("Full dashboard locked to real position quantities, basis, cash, and position gain/loss logic.")
 
-top_right = st.columns([3, 1])[1]
-with top_right:
+header_cols = st.columns([3, 1])
+with header_cols[1]:
     if st.button("Reset Table to Default", use_container_width=True):
         st.session_state.portfolio_df = make_default_df()
-        st.session_state.total_invested = float(DEFAULT_TOTAL_INVESTED)
-        st.session_state.portfolio_value = float(DEFAULT_PORTFOLIO_VALUE)
-        st.session_state.cash_sweep = float(DEFAULT_CASH_SWEEP)
+        st.session_state.total_contributions = float(DEFAULT_TOTAL_CONTRIBUTIONS)
         st.rerun()
 
 st.subheader("Add New Money")
-
 button_cols = st.columns(4)
 if button_cols[0].button("+ $1,000", use_container_width=True):
-    st.session_state.total_invested += 1000.0
-    st.session_state.portfolio_value += 1000.0
+    mask = st.session_state.portfolio_df["ticker"].str.upper() == "FDRXX"
+    if mask.any():
+        st.session_state.portfolio_df.loc[mask, "qty"] += 1000.0
+    st.session_state.total_contributions += 1000.0
     st.rerun()
 if button_cols[1].button("+ $5,000", use_container_width=True):
-    st.session_state.total_invested += 5000.0
-    st.session_state.portfolio_value += 5000.0
+    mask = st.session_state.portfolio_df["ticker"].str.upper() == "FDRXX"
+    if mask.any():
+        st.session_state.portfolio_df.loc[mask, "qty"] += 5000.0
+    st.session_state.total_contributions += 5000.0
     st.rerun()
 if button_cols[2].button("+ $10,000", use_container_width=True):
-    st.session_state.total_invested += 10000.0
-    st.session_state.portfolio_value += 10000.0
+    mask = st.session_state.portfolio_df["ticker"].str.upper() == "FDRXX"
+    if mask.any():
+        st.session_state.portfolio_df.loc[mask, "qty"] += 10000.0
+    st.session_state.total_contributions += 10000.0
     st.rerun()
 if button_cols[3].button("+ $32,000", use_container_width=True):
-    st.session_state.total_invested += 32000.0
-    st.session_state.portfolio_value += 32000.0
-    st.session_state.cash_sweep += 32000.0
+    mask = st.session_state.portfolio_df["ticker"].str.upper() == "FDRXX"
+    if mask.any():
+        st.session_state.portfolio_df.loc[mask, "qty"] += 32000.0
+    st.session_state.total_contributions += 32000.0
     st.rerun()
 
-edit_cols = st.columns(3)
+edit_cols = st.columns([1, 1])
 with edit_cols[0]:
-    st.session_state.total_invested = st.number_input(
-        "Total Invested / Contributions",
+    st.session_state.total_contributions = st.number_input(
+        "Total Contributions / Deposits",
         min_value=0.0,
         step=1000.0,
-        value=float(st.session_state.total_invested),
-        help="Only your deposits and transfers. This is not market growth.",
+        value=float(st.session_state.total_contributions),
+        help="Money you moved into this account setup. This is separate from position gain/loss.",
     )
 with edit_cols[1]:
-    st.session_state.portfolio_value = st.number_input(
-        "Current Portfolio Value",
-        min_value=0.0,
-        step=1000.0,
-        value=float(st.session_state.portfolio_value),
-        help="Your real current value, like what Fidelity shows.",
-    )
-with edit_cols[2]:
-    st.session_state.cash_sweep = st.number_input(
-        "Cash / Sweep Value",
+    custom_add = st.number_input(
+        "Custom cash deposit to FDRXX",
         min_value=0.0,
         step=500.0,
-        value=float(st.session_state.cash_sweep),
-        help="Current FDRXX / sweep cash value.",
+        value=0.0,
+        help="Adds fresh cash to FDRXX and increases contributions by the same amount.",
     )
+    if st.button("Add Custom Deposit", use_container_width=True):
+        if custom_add > 0:
+            mask = st.session_state.portfolio_df["ticker"].str.upper() == "FDRXX"
+            if mask.any():
+                st.session_state.portfolio_df.loc[mask, "qty"] += float(custom_add)
+            st.session_state.total_contributions += float(custom_add)
+            st.rerun()
 
 st.subheader("Portfolio Holdings")
 
@@ -270,9 +268,11 @@ edited_df = st.data_editor(
     hide_index=True,
     column_config={
         "ticker": st.column_config.TextColumn("Ticker"),
-        "target_weight": st.column_config.NumberColumn("Target %", format="%.2f"),
-        "annual_yield": st.column_config.NumberColumn("Yield", format="%.4f"),
+        "qty": st.column_config.NumberColumn("Qty / Shares", format="%.3f"),
+        "avg_cost": st.column_config.NumberColumn("Avg Cost", format="$%.2f"),
         "manual_price": st.column_config.NumberColumn("Manual Price", format="$%.2f"),
+        "target_weight": st.column_config.NumberColumn("Target %", format="%.2f"),
+        "annual_yield": st.column_config.NumberColumn("Annual Yield", format="%.4f"),
         "payout_frequency": st.column_config.SelectboxColumn(
             "Payout Frequency",
             options=["monthly", "quarterly", "semiannual", "annual", "none"],
@@ -292,49 +292,45 @@ live_prices = fetch_live_prices(tickers)
 portfolio_df["current_price"] = portfolio_df["ticker"].apply(
     lambda t: 1.0 if str(t).upper() == "FDRXX" else float(live_prices.get(str(t).upper(), 0.0))
 )
-
 portfolio_df["current_price"] = portfolio_df.apply(
     lambda row: float(row["manual_price"]) if row["current_price"] <= 0 else float(row["current_price"]),
     axis=1,
 )
-
 portfolio_df["current_price"] = portfolio_df["current_price"].replace(0.0, 1.0)
 
-portfolio_value = float(st.session_state.portfolio_value)
-cash_sweep = min(float(st.session_state.cash_sweep), portfolio_value)
-investable_value = max(portfolio_value - cash_sweep, 0.0)
-
-is_cash = portfolio_df["ticker"].str.upper() == "FDRXX"
-non_cash_weight_total = float(portfolio_df.loc[~is_cash, "target_weight"].sum())
-
-def calc_market_value(row):
-    if str(row["ticker"]).upper() == "FDRXX":
-        return cash_sweep
-    if non_cash_weight_total <= 0:
-        return 0.0
-    return investable_value * float(row["target_weight"]) / non_cash_weight_total
-
-portfolio_df["market_value"] = portfolio_df.apply(calc_market_value, axis=1)
-portfolio_df["shares"] = portfolio_df["market_value"] / portfolio_df["current_price"]
+portfolio_df["market_value"] = portfolio_df["qty"] * portfolio_df["current_price"]
+portfolio_df["cost_basis_total"] = portfolio_df["qty"] * portfolio_df["avg_cost"]
+portfolio_df["position_gain_loss"] = portfolio_df.apply(
+    lambda row: 0.0 if str(row["ticker"]).upper() == "FDRXX" else float(row["market_value"] - row["cost_basis_total"]),
+    axis=1,
+)
+portfolio_df["actual_weight"] = 0.0
 portfolio_df["annual_income"] = portfolio_df["market_value"] * portfolio_df["annual_yield"]
 portfolio_df["monthly_income"] = portfolio_df["annual_income"] / 12.0
-portfolio_df["actual_weight"] = portfolio_df["market_value"] / max(portfolio_value, 1.0) * 100.0
-portfolio_df["target_value"] = portfolio_value * portfolio_df["target_weight"] / 100.0
-portfolio_df["dollar_gap"] = portfolio_df["target_value"] - portfolio_df["market_value"]
 
 total_value = float(portfolio_df["market_value"].sum())
-total_invested = float(st.session_state.total_invested)
-true_gain_loss = total_value - total_invested
+if total_value > 0:
+    portfolio_df["actual_weight"] = portfolio_df["market_value"] / total_value * 100.0
+
+tracked_position_gl = float(portfolio_df["position_gain_loss"].sum())
+total_cost_basis_ex_cash = float(portfolio_df.loc[portfolio_df["ticker"].str.upper() != "FDRXX", "cost_basis_total"].sum())
+cash_sweep = float(portfolio_df.loc[portfolio_df["ticker"].str.upper() == "FDRXX", "market_value"].sum())
+total_contributions = float(st.session_state.total_contributions)
+net_vs_contributions = total_value - total_contributions
 annual_income_total = float(portfolio_df["annual_income"].sum())
 monthly_income_total = annual_income_total / 12.0
 goal_progress = 0.0 if GOAL_MONTHLY <= 0 else max(0.0, min(monthly_income_total / GOAL_MONTHLY, 1.0))
 
-metric_cols = st.columns(5)
+portfolio_df["target_value"] = total_value * portfolio_df["target_weight"] / 100.0
+portfolio_df["dollar_gap"] = portfolio_df["target_value"] - portfolio_df["market_value"]
+
+metric_cols = st.columns(6)
 metric_cols[0].metric("Current Portfolio Value", currency(total_value))
-metric_cols[1].metric("Total Invested", currency(total_invested))
-metric_cols[2].metric("True Gain / Loss", currency(true_gain_loss))
-metric_cols[3].metric("Estimated Monthly Income", currency(monthly_income_total))
-metric_cols[4].metric("Cash / Sweep", currency(cash_sweep))
+metric_cols[1].metric("Cash / Sweep", currency(cash_sweep))
+metric_cols[2].metric("Position Gain / Loss", currency(tracked_position_gl))
+metric_cols[3].metric("Total Contributions", currency(total_contributions))
+metric_cols[4].metric("Net vs Contributions", currency(net_vs_contributions))
+metric_cols[5].metric("Estimated Monthly Income", currency(monthly_income_total))
 
 st.subheader("Goal Progress")
 st.progress(goal_progress, text=f"{goal_progress * 100:.1f}% of ${GOAL_MONTHLY:,.0f}/month goal")
@@ -346,29 +342,32 @@ with summary_cols[0]:
     summary_table = portfolio_df[
         [
             "ticker",
-            "shares",
+            "qty",
+            "avg_cost",
             "current_price",
             "market_value",
+            "position_gain_loss",
             "actual_weight",
-            "monthly_income",
         ]
     ].copy()
     summary_table.columns = [
         "Ticker",
-        "Est. Shares",
+        "Qty / Shares",
+        "Avg Cost",
         "Current Price",
         "Market Value",
+        "Position G/L",
         "Actual %",
-        "Monthly Income",
     ]
     st.dataframe(
         summary_table.style.format(
             {
-                "Est. Shares": "{:,.4f}",
+                "Qty / Shares": "{:,.3f}",
+                "Avg Cost": "${:,.2f}",
                 "Current Price": "${:,.2f}",
                 "Market Value": "${:,.2f}",
+                "Position G/L": "${:,.2f}",
                 "Actual %": "{:,.2f}%",
-                "Monthly Income": "${:,.2f}",
             }
         ),
         use_container_width=True,
@@ -391,12 +390,10 @@ with summary_cols[1]:
     )
 
 schedule_df = monthly_income_schedule(portfolio_df)
-
 schedule_cols = st.columns([1.2, 0.8])
 with schedule_cols[0]:
     st.markdown("### Estimated Monthly Dividend Calendar")
     st.bar_chart(schedule_df.set_index("Month"))
-
 with schedule_cols[1]:
     st.markdown("### Monthly Income by Month")
     st.dataframe(
@@ -434,11 +431,11 @@ st.dataframe(
 with st.expander("Important Notes"):
     st.write(
         """
-- This version keeps the full dashboard layout, but fixes the inflated math.
-- Position sizing is based on **Current Portfolio Value** and your **Target %** weights.
-- **Est. Shares** are calculated for display only, so fake hardcoded share counts do not blow up the total.
-- **Cash / Sweep** is entered separately and held as FDRXX at $1.00.
-- **Total Invested** should only change when you add your own money.
-- Live prices come from Yahoo Finance when available. If live prices fail, the app uses **Manual Price**.
+- **Position Gain / Loss** is now calculated from each holding's own basis, much closer to Fidelity's logic.
+- **Cash / Sweep** in FDRXX is treated as cash, not profit.
+- **Total Contributions** tracks money you added to the account.
+- **Net vs Contributions** is separate from **Position Gain / Loss** so deposits do not get mislabeled as market gains.
+- Live prices come from Yahoo Finance when available. If a live price fails, the app uses **Manual Price**.
+- If you update any quantity or avg cost to match Fidelity, the gain/loss math will update automatically.
         """
     )

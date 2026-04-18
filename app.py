@@ -53,6 +53,19 @@ DEFAULT_ROWS = [
 
 DEFAULT_CASH_FDRXX = 18690.50
 
+AGGRESSIVE_BUY_TIERS = {
+    "tier_1": ["SPYI", "DIVO"],
+    "tier_2": ["QQQI", "FEPI"],
+    "tier_3": ["SVOL", "IYRI", "TLTW"],
+    "avoid": ["GDXY", "IAU"],
+}
+
+AGGRESSIVE_BUY_SPLITS = {
+    "tier_1": 0.75,
+    "tier_2": 0.20,
+    "tier_3": 0.05,
+}
+
 
 def to_float(value, default: float = 0.0) -> float:
     try:
@@ -241,6 +254,61 @@ def add_new_money(amount: float) -> None:
         return
     st.session_state.cash_fdrxx = float(st.session_state.cash_fdrxx) + amount
     st.session_state.total_contributions = float(st.session_state.total_contributions) + amount
+
+
+def build_aggressive_income_suggestions(df: pd.DataFrame, available_cash: float) -> pd.DataFrame:
+    if available_cash <= 0:
+        return pd.DataFrame()
+
+    working = df.copy()
+    if "price_used" not in working.columns:
+        return pd.DataFrame()
+
+    price_map = {
+        str(row["ticker"]).upper().strip(): to_float(row["price_used"])
+        for _, row in working.iterrows()
+        if str(row["ticker"]).strip() != ""
+    }
+    drift_map = {
+        str(row["ticker"]).upper().strip(): to_float(row.get("drift_dollars", 0.0))
+        for _, row in working.iterrows()
+        if str(row["ticker"]).strip() != ""
+    }
+
+    suggestions = []
+
+    def allocate_group(tickers: List[str], dollars: float) -> None:
+        valid = [t for t in tickers if t in price_map and price_map[t] > 0]
+        if dollars <= 0 or not valid:
+            return
+
+        per_ticker = dollars / len(valid)
+        for ticker in valid:
+            price = price_map[ticker]
+            est_shares = per_ticker / price if price > 0 else 0.0
+            drift_value = drift_map.get(ticker, 0.0)
+            suggestions.append(
+                {
+                    "Ticker": ticker,
+                    "Suggested Buy $": round(per_ticker, 2),
+                    "Est Shares": round(est_shares, 3),
+                    "Price Used": round(price, 2),
+                    "Current Drift $": round(drift_value, 2),
+                }
+            )
+
+    tier_1_amt = available_cash * AGGRESSIVE_BUY_SPLITS["tier_1"]
+    tier_2_amt = available_cash * AGGRESSIVE_BUY_SPLITS["tier_2"]
+    tier_3_amt = available_cash * AGGRESSIVE_BUY_SPLITS["tier_3"]
+
+    allocate_group(AGGRESSIVE_BUY_TIERS["tier_1"], tier_1_amt)
+    allocate_group(AGGRESSIVE_BUY_TIERS["tier_2"], tier_2_amt)
+    allocate_group(AGGRESSIVE_BUY_TIERS["tier_3"], tier_3_amt)
+
+    if not suggestions:
+        return pd.DataFrame()
+
+    return pd.DataFrame(suggestions)
 
 
 def render_top_controls():
@@ -465,34 +533,30 @@ def render_breakdowns(calc: dict):
         hide_index=True,
     )
 
-    underweights = df.sort_values("drift_dollars").copy()
-    underweights = underweights[underweights["drift_dollars"] < 0]
+    if calc["cash_fdrxx"] > 0:
+        st.subheader("Smart Income Buys")
+        st.caption(
+            "Aggressive income mode: 75% to SPYI/DIVO, 20% to QQQI/FEPI, 5% to SVOL/IYRI/TLTW. "
+            "GDXY and IAU are intentionally excluded from new-money suggestions."
+        )
 
-    if len(underweights) > 0 and calc["cash_fdrxx"] > 0:
-        st.markdown("**Suggested buys with available cash (largest underweights first):**")
-        remaining_cash = calc["cash_fdrxx"]
-        suggestions = []
-        for _, row in underweights.iterrows():
-            needed = abs(float(row["drift_dollars"]))
-            buy_amt = min(remaining_cash, needed)
-            if buy_amt > 0:
-                suggestions.append(
-                    {
-                        "Ticker": row["ticker"],
-                        "Suggested Buy $": buy_amt,
-                    }
-                )
-                remaining_cash -= buy_amt
-            if remaining_cash <= 0:
-                break
+        sugg_df = build_aggressive_income_suggestions(df, calc["cash_fdrxx"])
 
-        if suggestions:
-            sugg_df = pd.DataFrame(suggestions)
+        if not sugg_df.empty:
             st.dataframe(
-                sugg_df.style.format({"Suggested Buy $": "${:,.2f}"}),
+                sugg_df.style.format(
+                    {
+                        "Suggested Buy $": "${:,.2f}",
+                        "Est Shares": "{:,.3f}",
+                        "Price Used": "${:,.2f}",
+                        "Current Drift $": "${:,.2f}",
+                    }
+                ),
                 use_container_width=True,
                 hide_index=True,
             )
+        else:
+            st.info("No smart income suggestions available right now.")
 
 
 def main():

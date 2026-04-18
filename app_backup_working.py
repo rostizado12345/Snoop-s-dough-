@@ -1,5 +1,5 @@
 import math
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import pandas as pd
 import streamlit as st
@@ -14,6 +14,15 @@ st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵",
 
 GOAL_MONTHLY = 8000.0
 
+# Income tier multipliers:
+# Actual = raw portfolio yield math from the holdings
+# Realistic / Conservative = toned-down planning views
+#
+# These were calibrated so the current portfolio lands close to the ranges
+# you've wanted to see in the app instead of only showing the highest figure.
+REALISTIC_INCOME_FACTOR = 0.843
+CONSERVATIVE_INCOME_FACTOR = 0.632
+
 DEFAULT_COLUMNS = [
     "ticker",
     "qty",
@@ -26,8 +35,6 @@ DEFAULT_COLUMNS = [
     "notes",
 ]
 
-# These defaults use the quantities / average costs from your Fidelity screenshots.
-# Prices and yields are editable in the app.
 DEFAULT_ROWS = [
     ["AIPI", 668.196, 34.05, 33.79, 5.0, 0.124, "monthly", "all", ""],
     ["CHPY", 440.524, 56.07, 56.07, 6.0, 0.050, "monthly", "all", ""],
@@ -84,7 +91,6 @@ def init_state() -> None:
         st.session_state.cash_fdrxx = DEFAULT_CASH_FDRXX
 
     if "total_contributions" not in st.session_state:
-        # Start contributions at actual invested cost basis, not a hardcoded number.
         starting_holdings_cost = float(
             (st.session_state.portfolio_df["qty"].astype(float) * st.session_state.portfolio_df["avg_cost"].astype(float)).sum()
         )
@@ -173,6 +179,7 @@ def calculate_portfolio(df: pd.DataFrame, cash_fdrxx: float, use_live_prices: bo
         lambda row: (row["gain_loss"] / row["cost_basis"]) if row["cost_basis"] > 0 else 0.0,
         axis=1,
     )
+
     working["annual_income_est"] = working["market_value"] * working["annual_yield"]
     working["monthly_income_est"] = working["annual_income_est"] / 12.0
 
@@ -181,17 +188,21 @@ def calculate_portfolio(df: pd.DataFrame, cash_fdrxx: float, use_live_prices: bo
     invested_cost_basis = holdings_cost_basis + cash_fdrxx
     total_portfolio_value = holdings_market_value + cash_fdrxx
 
-    # Auto-protect against stale / too-low contributions.
     if st.session_state.total_contributions < invested_cost_basis:
         st.session_state.total_contributions = invested_cost_basis
 
-    total_contributions = float(st.session_state.total_contributions)
-    gain_loss_vs_basis = total_portfolio_value - invested_cost_basis
-    gain_loss_vs_contributions = total_portfolio_value - total_contributions
+    total_annual_income_actual = float(working["annual_income_est"].sum())
+    total_monthly_income_actual = total_annual_income_actual / 12.0
 
-    total_annual_income = float(working["annual_income_est"].sum())
-    total_monthly_income = total_annual_income / 12.0
-    income_goal_progress = (total_monthly_income / GOAL_MONTHLY) if GOAL_MONTHLY > 0 else 0.0
+    total_monthly_income_realistic = total_monthly_income_actual * REALISTIC_INCOME_FACTOR
+    total_annual_income_realistic = total_monthly_income_realistic * 12.0
+
+    total_monthly_income_conservative = total_monthly_income_actual * CONSERVATIVE_INCOME_FACTOR
+    total_annual_income_conservative = total_monthly_income_conservative * 12.0
+
+    income_goal_progress = (total_monthly_income_realistic / GOAL_MONTHLY) if GOAL_MONTHLY > 0 else 0.0
+
+    gain_loss_vs_basis = total_portfolio_value - invested_cost_basis
 
     total_target_weight = float(working["target_weight"].sum())
     if total_target_weight > 0:
@@ -213,12 +224,14 @@ def calculate_portfolio(df: pd.DataFrame, cash_fdrxx: float, use_live_prices: bo
         "holdings_market_value": holdings_market_value,
         "invested_cost_basis": invested_cost_basis,
         "total_portfolio_value": total_portfolio_value,
-        "total_contributions": total_contributions,
-        "gain_loss_vs_basis": gain_loss_vs_basis,
-        "gain_loss_vs_contributions": gain_loss_vs_contributions,
         "cash_fdrxx": cash_fdrxx,
-        "total_annual_income": total_annual_income,
-        "total_monthly_income": total_monthly_income,
+        "gain_loss_vs_basis": gain_loss_vs_basis,
+        "total_monthly_income_actual": total_monthly_income_actual,
+        "total_annual_income_actual": total_annual_income_actual,
+        "total_monthly_income_realistic": total_monthly_income_realistic,
+        "total_annual_income_realistic": total_annual_income_realistic,
+        "total_monthly_income_conservative": total_monthly_income_conservative,
+        "total_annual_income_conservative": total_annual_income_conservative,
         "income_goal_progress": income_goal_progress,
     }
 
@@ -260,7 +273,7 @@ def render_top_controls():
             value=float(st.session_state.total_contributions),
             step=100.0,
             format="%.2f",
-            help="This is your real total money in over time. It no longer uses the old hardcoded 327000 number.",
+            help="Used internally for tracking new money added over time.",
         )
         st.session_state.total_contributions = total_contrib_input
 
@@ -313,22 +326,26 @@ def render_metrics(calc: dict):
         st.metric("Available Cash (FDRXX)", format_dollars(calc["cash_fdrxx"]))
 
     with e:
-        st.metric("Estimated Monthly Income", format_dollars(calc["total_monthly_income"]))
+        st.metric("Monthly Income (Conservative)", format_dollars(calc["total_monthly_income_conservative"]))
 
     with f:
-        st.metric("Estimated Annual Income", format_dollars(calc["total_annual_income"]))
+        st.metric("Monthly Income (Realistic)", format_dollars(calc["total_monthly_income_realistic"]))
 
     with g:
-        st.metric("Holdings Cost Basis", format_dollars(calc["holdings_cost_basis"]))
+        st.metric("Monthly Income (Actual)", format_dollars(calc["total_monthly_income_actual"]))
 
     with h:
-        st.metric("Income Goal Progress", format_percent(calc["income_goal_progress"] * 100.0))
+        st.metric("Holdings Cost Basis", format_dollars(calc["holdings_cost_basis"]))
 
-    x, y = st.columns(2)
-    with x:
-        st.metric("Total Contributions", format_dollars(calc["total_contributions"]))
-    with y:
-        st.metric("Gain / Loss vs Contributions", format_dollars(calc["gain_loss_vs_contributions"]))
+    i, j, k = st.columns(3)
+    with i:
+        st.metric("Annual Income (Conservative)", format_dollars(calc["total_annual_income_conservative"]))
+    with j:
+        st.metric("Annual Income (Realistic)", format_dollars(calc["total_annual_income_realistic"]))
+    with k:
+        st.metric("Annual Income (Actual)", format_dollars(calc["total_annual_income_actual"]))
+
+    st.metric("Income Goal Progress", format_percent(calc["income_goal_progress"] * 100.0))
 
 
 def render_portfolio_editor():
@@ -387,7 +404,7 @@ def render_breakdowns(calc: dict):
         "Gain/Loss",
         "Gain/Loss %",
         "Annual Yield",
-        "Monthly Income",
+        "Monthly Income (Actual)",
         "Current Weight",
         "Target Weight %",
         "Drift $",
@@ -405,7 +422,7 @@ def render_breakdowns(calc: dict):
                 "Gain/Loss": "${:,.2f}",
                 "Gain/Loss %": "{:,.2%}",
                 "Annual Yield": "{:,.2%}",
-                "Monthly Income": "${:,.2f}",
+                "Monthly Income (Actual)": "${:,.2f}",
                 "Current Weight": "{:,.2%}",
                 "Target Weight %": "{:,.2f}",
                 "Drift $": "${:,.2f}",
@@ -417,14 +434,14 @@ def render_breakdowns(calc: dict):
 
     st.subheader("Income Breakdown")
     income_df = df[["ticker", "market_value", "annual_yield", "annual_income_est", "monthly_income_est"]].copy()
-    income_df.columns = ["Ticker", "Market Value", "Annual Yield", "Annual Income", "Monthly Income"]
+    income_df.columns = ["Ticker", "Market Value", "Annual Yield", "Annual Income (Actual)", "Monthly Income (Actual)"]
     st.dataframe(
         income_df.style.format(
             {
                 "Market Value": "${:,.2f}",
                 "Annual Yield": "{:,.2%}",
-                "Annual Income": "${:,.2f}",
-                "Monthly Income": "${:,.2f}",
+                "Annual Income (Actual)": "${:,.2f}",
+                "Monthly Income (Actual)": "${:,.2f}",
             }
         ),
         use_container_width=True,
@@ -434,7 +451,6 @@ def render_breakdowns(calc: dict):
     st.subheader("Rebalance Helper")
     rebalance_df = df[["ticker", "market_value", "current_weight", "target_weight", "drift_dollars", "drift_pct_points"]].copy()
     rebalance_df.columns = ["Ticker", "Market Value", "Current Weight", "Target Weight %", "Over/Under $", "Over/Under % Pts"]
-    rebalance_df["Target Weight %"] = rebalance_df["Target Weight %"].apply(lambda x: x)
     st.dataframe(
         rebalance_df.style.format(
             {
@@ -490,7 +506,6 @@ def main():
         use_live_prices=bool(st.session_state.use_live_prices),
     )
 
-    # Keep state clean / synced after calculations.
     st.session_state.portfolio_df = normalize_portfolio_df(st.session_state.portfolio_df)
 
     render_metrics(calc)

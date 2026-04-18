@@ -17,9 +17,6 @@ GOAL_MONTHLY = 8000.0
 # Income tier multipliers:
 # Actual = raw portfolio yield math from the holdings
 # Realistic / Conservative = toned-down planning views
-#
-# These were calibrated so the current portfolio lands close to the ranges
-# you've wanted to see in the app instead of only showing the highest figure.
 REALISTIC_INCOME_FACTOR = 0.843
 CONSERVATIVE_INCOME_FACTOR = 0.632
 
@@ -53,14 +50,14 @@ DEFAULT_ROWS = [
 
 DEFAULT_CASH_FDRXX = 18690.50
 
-AGGRESSIVE_BUY_TIERS = {
+SMART_INCOME_TIERS = {
     "tier_1": ["SPYI", "DIVO"],
     "tier_2": ["QQQI", "FEPI"],
     "tier_3": ["SVOL", "IYRI", "TLTW"],
     "avoid": ["GDXY", "IAU"],
 }
 
-AGGRESSIVE_BUY_SPLITS = {
+SMART_INCOME_SPLITS = {
     "tier_1": 0.75,
     "tier_2": 0.20,
     "tier_3": 0.05,
@@ -256,7 +253,7 @@ def add_new_money(amount: float) -> None:
     st.session_state.total_contributions = float(st.session_state.total_contributions) + amount
 
 
-def build_aggressive_income_suggestions(df: pd.DataFrame, available_cash: float) -> pd.DataFrame:
+def build_smarter_income_suggestions(df: pd.DataFrame, available_cash: float) -> pd.DataFrame:
     if available_cash <= 0:
         return pd.DataFrame()
 
@@ -264,26 +261,42 @@ def build_aggressive_income_suggestions(df: pd.DataFrame, available_cash: float)
     if "price_used" not in working.columns:
         return pd.DataFrame()
 
+    working["ticker"] = working["ticker"].astype(str).str.upper().str.strip()
+
     price_map = {
-        str(row["ticker"]).upper().strip(): to_float(row["price_used"])
+        row["ticker"]: to_float(row["price_used"])
         for _, row in working.iterrows()
-        if str(row["ticker"]).strip() != ""
+        if row["ticker"] != ""
     }
     drift_map = {
-        str(row["ticker"]).upper().strip(): to_float(row.get("drift_dollars", 0.0))
+        row["ticker"]: to_float(row.get("drift_dollars", 0.0))
         for _, row in working.iterrows()
-        if str(row["ticker"]).strip() != ""
+        if row["ticker"] != ""
     }
 
     suggestions = []
 
-    def allocate_group(tickers: List[str], dollars: float) -> None:
+    def choose_eligible(tickers: List[str]) -> List[str]:
         valid = [t for t in tickers if t in price_map and price_map[t] > 0]
-        if dollars <= 0 or not valid:
+        if not valid:
+            return []
+
+        under_or_equal = [t for t in valid if drift_map.get(t, 0.0) <= 0]
+        if under_or_equal:
+            return under_or_equal
+
+        # If an entire tier is overweight, allow the least overweight one(s)
+        min_positive_drift = min(drift_map.get(t, 0.0) for t in valid)
+        fallback = [t for t in valid if abs(drift_map.get(t, 0.0) - min_positive_drift) < 0.01]
+        return fallback if fallback else valid
+
+    def allocate_group(tickers: List[str], dollars: float) -> None:
+        eligible = choose_eligible(tickers)
+        if dollars <= 0 or not eligible:
             return
 
-        per_ticker = dollars / len(valid)
-        for ticker in valid:
+        per_ticker = dollars / len(eligible)
+        for ticker in eligible:
             price = price_map[ticker]
             est_shares = per_ticker / price if price > 0 else 0.0
             drift_value = drift_map.get(ticker, 0.0)
@@ -297,13 +310,13 @@ def build_aggressive_income_suggestions(df: pd.DataFrame, available_cash: float)
                 }
             )
 
-    tier_1_amt = available_cash * AGGRESSIVE_BUY_SPLITS["tier_1"]
-    tier_2_amt = available_cash * AGGRESSIVE_BUY_SPLITS["tier_2"]
-    tier_3_amt = available_cash * AGGRESSIVE_BUY_SPLITS["tier_3"]
+    tier_1_amt = available_cash * SMART_INCOME_SPLITS["tier_1"]
+    tier_2_amt = available_cash * SMART_INCOME_SPLITS["tier_2"]
+    tier_3_amt = available_cash * SMART_INCOME_SPLITS["tier_3"]
 
-    allocate_group(AGGRESSIVE_BUY_TIERS["tier_1"], tier_1_amt)
-    allocate_group(AGGRESSIVE_BUY_TIERS["tier_2"], tier_2_amt)
-    allocate_group(AGGRESSIVE_BUY_TIERS["tier_3"], tier_3_amt)
+    allocate_group(SMART_INCOME_TIERS["tier_1"], tier_1_amt)
+    allocate_group(SMART_INCOME_TIERS["tier_2"], tier_2_amt)
+    allocate_group(SMART_INCOME_TIERS["tier_3"], tier_3_amt)
 
     if not suggestions:
         return pd.DataFrame()
@@ -536,11 +549,11 @@ def render_breakdowns(calc: dict):
     if calc["cash_fdrxx"] > 0:
         st.subheader("Smart Income Buys")
         st.caption(
-            "Aggressive income mode: 75% to SPYI/DIVO, 20% to QQQI/FEPI, 5% to SVOL/IYRI/TLTW. "
-            "GDXY and IAU are intentionally excluded from new-money suggestions."
+            "Smarter aggressive income mode: prioritize SPYI/DIVO first, but skip overweight names when possible; "
+            "then QQQI/FEPI; then SVOL/IYRI/TLTW. GDXY and IAU remain excluded."
         )
 
-        sugg_df = build_aggressive_income_suggestions(df, calc["cash_fdrxx"])
+        sugg_df = build_smarter_income_suggestions(df, calc["cash_fdrxx"])
 
         if not sugg_df.empty:
             st.dataframe(

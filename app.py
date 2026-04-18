@@ -30,7 +30,7 @@ DEFAULT_ROWS = [
     ["AIPI", 668.196, 34.05, 33.79, 5.0, 0.124, "monthly", "all", ""],
     ["CHPY", 436.770, 60.2043356916, 61.01, 6.0, 0.050, "monthly", "all", "Basis inferred from value and G/L"],
     ["DIVO", 857.354, 44.73, 45.53, 10.0, 0.053, "monthly", "all", ""],
-    ["FDRXX", 50690.280, 1.00, 1.00, 7.0, 0.045, "monthly", "all", "Cash / sweep"],
+    ["FDRXX", 18690.500, 1.00, 1.00, 7.0, 0.045, "monthly", "all", "Cash / sweep"],
     ["FEPI", 662.641, 40.37, 41.11, 7.0, 0.118, "monthly", "all", ""],
     ["GDXY", 2698.805, 13.12, 14.58, 15.0, 0.165, "monthly", "all", ""],
     ["IAU", 141.249, 83.54, 89.56, 4.0, 0.000, "none", "none", ""],

@@ -44,8 +44,18 @@ DEFAULT_ROWS = [
 ]
 
 MONTH_NAME_MAP = {
-    1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
-    7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
+    1: "Jan",
+    2: "Feb",
+    3: "Mar",
+    4: "Apr",
+    5: "May",
+    6: "Jun",
+    7: "Jul",
+    8: "Aug",
+    9: "Sep",
+    10: "Oct",
+    11: "Nov",
+    12: "Dec",
 }
 
 INCOME_EXCLUDED_TICKERS = {"FDRXX"}
@@ -90,7 +100,7 @@ def make_default_df() -> pd.DataFrame:
 
 
 def currency(value: float) -> str:
-    return f"${value:,.2f}"
+    return f"${float(value):,.2f}"
 
 
 def clean_numeric(series: pd.Series, default: float = 0.0) -> pd.Series:
@@ -99,9 +109,11 @@ def clean_numeric(series: pd.Series, default: float = 0.0) -> pd.Series:
 
 def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
+
     for col in DEFAULT_COLUMNS:
         if col not in df.columns:
             df[col] = ""
+
     df = df[DEFAULT_COLUMNS]
 
     text_cols = ["ticker", "payout_frequency", "payout_months", "notes"]
@@ -113,6 +125,13 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         df[col] = clean_numeric(df[col], 0.0)
 
     df["ticker"] = df["ticker"].str.upper().str.strip()
+    df["payout_frequency"] = df["payout_frequency"].str.lower().str.strip()
+    df["qty"] = df["qty"].clip(lower=0.0)
+    df["avg_cost"] = df["avg_cost"].clip(lower=0.0)
+    df["manual_price"] = df["manual_price"].clip(lower=0.0)
+    df["target_weight"] = df["target_weight"].clip(lower=0.0)
+    df["annual_yield"] = df["annual_yield"].clip(lower=0.0)
+
     df = df[df["ticker"] != ""].reset_index(drop=True)
     return df
 
@@ -120,6 +139,7 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 def ensure_fdrxx_row(df: pd.DataFrame) -> pd.DataFrame:
     df = normalize_dataframe(df)
     mask = df["ticker"].str.upper() == "FDRXX"
+
     if not mask.any():
         new_row = pd.DataFrame(
             [["FDRXX", 0.0, 1.00, 1.00, 7.0, 0.045, "monthly", "all", "Cash / sweep"]],
@@ -128,14 +148,13 @@ def ensure_fdrxx_row(df: pd.DataFrame) -> pd.DataFrame:
         df = pd.concat([df, new_row], ignore_index=True)
     else:
         idx = df.index[mask][0]
-        if float(df.loc[idx, "manual_price"]) <= 0:
-            df.loc[idx, "manual_price"] = 1.00
-        if float(df.loc[idx, "avg_cost"]) <= 0:
-            df.loc[idx, "avg_cost"] = 1.00
+        df.loc[idx, "manual_price"] = 1.00
+        df.loc[idx, "avg_cost"] = 1.00
         if str(df.loc[idx, "payout_frequency"]).strip() == "":
             df.loc[idx, "payout_frequency"] = "monthly"
         if str(df.loc[idx, "payout_months"]).strip() == "":
             df.loc[idx, "payout_months"] = "all"
+
     return normalize_dataframe(df)
 
 
@@ -154,6 +173,9 @@ def ensure_state() -> None:
     if "deploy_ticker" not in st.session_state:
         st.session_state.deploy_ticker = "SPYI"
 
+    if "custom_add" not in st.session_state:
+        st.session_state.custom_add = 0.0
+
 
 def fetch_live_prices(tickers: List[str]) -> Dict[str, float]:
     prices: Dict[str, float] = {}
@@ -161,7 +183,8 @@ def fetch_live_prices(tickers: List[str]) -> Dict[str, float]:
     if not tickers or yf is None:
         return prices
 
-    symbols = [t for t in tickers if t and t.upper() != "FDRXX"]
+    symbols = [str(t).upper().strip() for t in tickers if str(t).upper().strip() and str(t).upper().strip() != "FDRXX"]
+    symbols = list(dict.fromkeys(symbols))
     if not symbols:
         return prices
 
@@ -188,9 +211,12 @@ def fetch_live_prices(tickers: List[str]) -> Dict[str, float]:
                 except Exception:
                     continue
         else:
-            close_series = history["Close"].dropna()
-            if len(symbols) == 1 and not close_series.empty:
-                prices[symbols[0]] = float(close_series.iloc[-1])
+            try:
+                close_series = history["Close"].dropna()
+                if len(symbols) == 1 and not close_series.empty:
+                    prices[symbols[0]] = float(close_series.iloc[-1])
+            except Exception:
+                pass
     except Exception:
         return prices
 
@@ -216,6 +242,7 @@ def parse_months(text: str) -> List[int]:
                 months.append(month_num)
         except Exception:
             continue
+
     return sorted(list(set(months)))
 
 
@@ -227,7 +254,7 @@ def monthly_income_schedule(df: pd.DataFrame, annual_income_column: str) -> pd.D
         frequency = str(row["payout_frequency"]).strip().lower()
         months = parse_months(row["payout_months"])
 
-        if annual_income <= 0:
+        if annual_income <= 0 or frequency == "none":
             continue
 
         if frequency == "monthly":
@@ -271,7 +298,7 @@ def is_income_position(ticker: str) -> bool:
 
 
 def get_live_or_manual_price(df: pd.DataFrame, ticker: str, live_prices: Dict[str, float]) -> float:
-    ticker = str(ticker).upper()
+    ticker = str(ticker).upper().strip()
     if ticker == "FDRXX":
         return 1.0
 
@@ -296,6 +323,7 @@ def add_cash_to_fdrxx(amount: float) -> None:
     df = ensure_fdrxx_row(st.session_state.portfolio_df.copy())
     mask = df["ticker"].str.upper() == "FDRXX"
     df.loc[mask, "qty"] = clean_numeric(df.loc[mask, "qty"], 0.0) + amount
+
     st.session_state.portfolio_df = ensure_fdrxx_row(df)
     st.session_state.total_contributions = float(st.session_state.total_contributions) + amount
 
@@ -316,21 +344,23 @@ def deploy_cash_to_ticker(target_ticker: str, amount: float, live_prices: Dict[s
     if amount > available_cash + 1e-9:
         return f"Not enough cash in FDRXX. Available cash is {currency(available_cash)}."
 
+    target_mask = df["ticker"].str.upper() == target_ticker
+    if not target_mask.any():
+        return f"{target_ticker} is not in the holdings table yet. Add it there first, then deploy cash."
+
     price = get_live_or_manual_price(df, target_ticker, live_prices)
     if price <= 0:
         return f"Could not determine a valid price for {target_ticker}."
 
     shares_to_buy = amount / price
-
-    target_mask = df["ticker"].str.upper() == target_ticker
-    if not target_mask.any():
-        return f"{target_ticker} is not in the holdings table yet. Add it there first, then deploy cash."
+    if shares_to_buy <= 0:
+        return "Deploy would result in an invalid share quantity."
 
     idx = df.index[target_mask][0]
     old_qty = float(df.loc[idx, "qty"])
     old_avg_cost = float(df.loc[idx, "avg_cost"])
-
     new_qty = old_qty + shares_to_buy
+
     if new_qty <= 0:
         return "Deploy would result in an invalid share quantity."
 
@@ -348,10 +378,56 @@ def deploy_cash_to_ticker(target_ticker: str, amount: float, live_prices: Dict[s
     return f"Deployed {currency(amount)} from FDRXX into {target_ticker} at about {currency(price)} per share."
 
 
+def build_analytics(df: pd.DataFrame, live_prices: Dict[str, float]) -> pd.DataFrame:
+    df = ensure_fdrxx_row(normalize_dataframe(df.copy()))
+
+    df["current_price"] = df["ticker"].apply(lambda t: get_live_or_manual_price(df, str(t), live_prices))
+    df["current_price"] = clean_numeric(df["current_price"], 1.0).replace(0.0, 1.0)
+
+    df["market_value"] = df["qty"] * df["current_price"]
+    df["cost_basis_total"] = df["qty"] * df["avg_cost"]
+
+    df["position_gain_loss"] = df.apply(
+        lambda row: 0.0 if str(row["ticker"]).upper() == "FDRXX" else float(row["market_value"] - row["cost_basis_total"]),
+        axis=1,
+    )
+
+    total_value = float(df["market_value"].sum())
+    if total_value > 0:
+        df["actual_weight"] = df["market_value"] / total_value * 100.0
+    else:
+        df["actual_weight"] = 0.0
+
+    df["income_eligible"] = df["ticker"].apply(is_income_position)
+
+    df["annual_income_actual"] = df.apply(
+        lambda row: float(row["market_value"] * row["annual_yield"]) if bool(row["income_eligible"]) else 0.0,
+        axis=1,
+    )
+    df["annual_income_realistic"] = df.apply(
+        lambda row: float(row["annual_income_actual"]) * get_realistic_multiplier(str(row["ticker"])),
+        axis=1,
+    )
+    df["annual_income_safe"] = df.apply(
+        lambda row: float(row["annual_income_actual"]) * get_safe_multiplier(str(row["ticker"])),
+        axis=1,
+    )
+    df["monthly_income_actual"] = df["annual_income_actual"] / 12.0
+    df["monthly_income_realistic"] = df["annual_income_realistic"] / 12.0
+    df["monthly_income_safe"] = df["annual_income_safe"] / 12.0
+
+    df["target_value"] = total_value * df["target_weight"] / 100.0
+    df["dollar_gap"] = df["target_value"] - df["market_value"]
+
+    return df
+
+
 ensure_state()
 
 st.title("💵 Retirement Paycheck Dashboard")
-st.caption("Full dashboard locked to real position quantities, basis, cash, position gain/loss logic, income tiers, and cash deployment workflow.")
+st.caption(
+    "Full dashboard locked to real position quantities, basis, cash, position gain/loss logic, income tiers, cash deployment workflow, and tighter contribution tracking."
+)
 
 header_cols = st.columns([3, 1])
 with header_cols[1]:
@@ -360,6 +436,7 @@ with header_cols[1]:
         st.session_state.total_contributions = float(DEFAULT_TOTAL_CONTRIBUTIONS)
         st.session_state.deploy_amount = 0.0
         st.session_state.deploy_ticker = "SPYI"
+        st.session_state.custom_add = 0.0
         st.rerun()
 
 st.subheader("Add New Money")
@@ -376,30 +453,6 @@ if button_cols[2].button("+ $10,000", use_container_width=True):
 if button_cols[3].button("+ $32,000", use_container_width=True):
     add_cash_to_fdrxx(32000.0)
     st.rerun()
-
-edit_cols = st.columns([1, 1])
-with edit_cols[0]:
-    st.session_state.total_contributions = st.number_input(
-        "Total Contributions / Deposits",
-        min_value=0.0,
-        step=1000.0,
-        value=float(st.session_state.total_contributions),
-        help="Money you moved into this account setup. This is separate from position gain/loss.",
-    )
-with edit_cols[1]:
-    custom_add = st.number_input(
-        "Custom cash deposit to FDRXX",
-        min_value=0.0,
-        step=500.0,
-        value=0.0,
-        help="Adds fresh cash to FDRXX and increases contributions by the same amount.",
-    )
-    if st.button("Add Custom Deposit", use_container_width=True):
-        if custom_add > 0:
-            add_cash_to_fdrxx(float(custom_add))
-            st.rerun()
-
-st.subheader("Portfolio Holdings")
 
 working_df = ensure_fdrxx_row(normalize_dataframe(st.session_state.portfolio_df))
 
@@ -430,75 +483,93 @@ st.session_state.portfolio_df = portfolio_df
 
 tickers = portfolio_df["ticker"].tolist()
 live_prices = fetch_live_prices(tickers)
+portfolio_df = build_analytics(portfolio_df, live_prices)
 
-portfolio_df["current_price"] = portfolio_df["ticker"].apply(
-    lambda t: 1.0 if str(t).upper() == "FDRXX" else float(live_prices.get(str(t).upper(), 0.0))
-)
-portfolio_df["current_price"] = portfolio_df.apply(
-    lambda row: float(row["manual_price"]) if row["current_price"] <= 0 else float(row["current_price"]),
-    axis=1,
-)
-portfolio_df["current_price"] = portfolio_df["current_price"].replace(0.0, 1.0)
-
-portfolio_df["market_value"] = portfolio_df["qty"] * portfolio_df["current_price"]
-portfolio_df["cost_basis_total"] = portfolio_df["qty"] * portfolio_df["avg_cost"]
-portfolio_df["position_gain_loss"] = portfolio_df.apply(
-    lambda row: 0.0 if str(row["ticker"]).upper() == "FDRXX" else float(row["market_value"] - row["cost_basis_total"]),
-    axis=1,
-)
-portfolio_df["actual_weight"] = 0.0
-
-portfolio_df["income_eligible"] = portfolio_df["ticker"].apply(is_income_position)
-
-portfolio_df["annual_income_actual"] = portfolio_df.apply(
-    lambda row: float(row["market_value"] * row["annual_yield"]) if bool(row["income_eligible"]) else 0.0,
-    axis=1,
-)
-portfolio_df["annual_income_realistic"] = portfolio_df.apply(
-    lambda row: float(row["annual_income_actual"]) * get_realistic_multiplier(str(row["ticker"])),
-    axis=1,
-)
-portfolio_df["annual_income_safe"] = portfolio_df.apply(
-    lambda row: float(row["annual_income_actual"]) * get_safe_multiplier(str(row["ticker"])),
-    axis=1,
-)
-portfolio_df["monthly_income_actual"] = portfolio_df["annual_income_actual"] / 12.0
-portfolio_df["monthly_income_realistic"] = portfolio_df["annual_income_realistic"] / 12.0
-portfolio_df["monthly_income_safe"] = portfolio_df["annual_income_safe"] / 12.0
+cash_mask = portfolio_df["ticker"].str.upper() == "FDRXX"
+invested_mask = ~cash_mask
 
 total_value = float(portfolio_df["market_value"].sum())
-if total_value > 0:
-    portfolio_df["actual_weight"] = portfolio_df["market_value"] / total_value * 100.0
-
+cash_sweep = float(portfolio_df.loc[cash_mask, "market_value"].sum())
+invested_market_value = float(portfolio_df.loc[invested_mask, "market_value"].sum())
+cash_invested_basis = float(portfolio_df.loc[invested_mask, "cost_basis_total"].sum())
+total_cost_basis_all = float(portfolio_df["cost_basis_total"].sum())
 tracked_position_gl = float(portfolio_df["position_gain_loss"].sum())
-cash_sweep = float(portfolio_df.loc[portfolio_df["ticker"].str.upper() == "FDRXX", "market_value"].sum())
-total_contributions = float(st.session_state.total_contributions)
-net_vs_contributions = total_value - total_contributions
+portfolio_total_gl = total_value - total_cost_basis_all
+
 annual_income_actual_total = float(portfolio_df["annual_income_actual"].sum())
 annual_income_realistic_total = float(portfolio_df["annual_income_realistic"].sum())
 annual_income_safe_total = float(portfolio_df["annual_income_safe"].sum())
+
 monthly_income_actual_total = annual_income_actual_total / 12.0
 monthly_income_realistic_total = annual_income_realistic_total / 12.0
 monthly_income_safe_total = annual_income_safe_total / 12.0
-goal_progress = 0.0 if GOAL_MONTHLY <= 0 else max(0.0, min(monthly_income_realistic_total / GOAL_MONTHLY, 1.0))
 
-portfolio_df["target_value"] = total_value * portfolio_df["target_weight"] / 100.0
-portfolio_df["dollar_gap"] = portfolio_df["target_value"] - portfolio_df["market_value"]
+goal_progress = 0.0
+if GOAL_MONTHLY > 0:
+    goal_progress = max(0.0, min(monthly_income_realistic_total / GOAL_MONTHLY, 1.0))
+
+st.subheader("Contribution & Cash Controls")
+
+control_cols = st.columns([1.15, 1.05, 0.8, 0.8])
+with control_cols[0]:
+    manual_total_contributions = st.number_input(
+        "Total Contributions / Deposits",
+        min_value=0.0,
+        step=1000.0,
+        value=float(st.session_state.total_contributions),
+        help="Manual total money added to this account setup. Use the sync button if you want it to match the table's total cost basis exactly.",
+    )
+    st.session_state.total_contributions = float(manual_total_contributions)
+
+with control_cols[1]:
+    custom_add = st.number_input(
+        "Custom cash deposit to FDRXX",
+        min_value=0.0,
+        step=500.0,
+        value=float(st.session_state.custom_add),
+        help="Adds fresh cash to FDRXX and increases Total Contributions by the same amount.",
+    )
+    st.session_state.custom_add = float(custom_add)
+    if st.button("Add Custom Deposit", use_container_width=True):
+        if custom_add > 0:
+            add_cash_to_fdrxx(float(custom_add))
+            st.session_state.custom_add = 0.0
+            st.rerun()
+
+with control_cols[2]:
+    st.metric("Holdings Cost Basis", currency(total_cost_basis_all))
+    if st.button("Sync Contributions to Basis", use_container_width=True):
+        st.session_state.total_contributions = float(total_cost_basis_all)
+        st.rerun()
+
+with control_cols[3]:
+    st.metric("Invested Cost Basis", currency(cash_invested_basis))
+    if st.button("Set Contributions = Cash + Invested", use_container_width=True):
+        st.session_state.total_contributions = float(cash_sweep + cash_invested_basis)
+        st.rerun()
+
+total_contributions = float(st.session_state.total_contributions)
+net_vs_contributions = total_value - total_contributions
+basis_gap_vs_contributions = total_cost_basis_all - total_contributions
 
 st.subheader("Deploy Cash Into a Position")
 deployable_tickers = [t for t in portfolio_df["ticker"].tolist() if str(t).upper() != "FDRXX"]
-deploy_cols = st.columns([1.2, 1, 0.9, 0.9])
+deploy_cols = st.columns([1.25, 1.0, 0.85, 0.9])
 
 with deploy_cols[0]:
-    default_index = 0
-    if st.session_state.deploy_ticker in deployable_tickers:
-        default_index = deployable_tickers.index(st.session_state.deploy_ticker)
-    st.session_state.deploy_ticker = st.selectbox(
-        "Choose ticker to buy",
-        options=deployable_tickers,
-        index=default_index if deployable_tickers else 0,
-        key="deploy_ticker_select",
-    )
+    if deployable_tickers:
+        default_index = 0
+        if st.session_state.deploy_ticker in deployable_tickers:
+            default_index = deployable_tickers.index(st.session_state.deploy_ticker)
+        st.session_state.deploy_ticker = st.selectbox(
+            "Choose ticker to buy",
+            options=deployable_tickers,
+            index=default_index,
+            key="deploy_ticker_select",
+        )
+    else:
+        st.warning("Add at least one investment ticker besides FDRXX.")
+        st.session_state.deploy_ticker = ""
 
 with deploy_cols[1]:
     st.session_state.deploy_amount = st.number_input(
@@ -524,12 +595,19 @@ with deploy_cols[3]:
         else:
             st.error(message)
 
-metric_cols = st.columns(5)
+metric_cols = st.columns(6)
 metric_cols[0].metric("Current Portfolio Value", currency(total_value))
 metric_cols[1].metric("Cash / Sweep", currency(cash_sweep))
-metric_cols[2].metric("Position Gain / Loss", currency(tracked_position_gl))
-metric_cols[3].metric("Total Contributions", currency(total_contributions))
-metric_cols[4].metric("Net vs Contributions", currency(net_vs_contributions))
+metric_cols[2].metric("Cash Invested", currency(cash_invested_basis))
+metric_cols[3].metric("Position Gain / Loss", currency(tracked_position_gl))
+metric_cols[4].metric("Total Contributions", currency(total_contributions))
+metric_cols[5].metric("Net vs Contributions", currency(net_vs_contributions))
+
+secondary_metric_cols = st.columns(4)
+secondary_metric_cols[0].metric("Invested Market Value", currency(invested_market_value))
+secondary_metric_cols[1].metric("Portfolio Total Gain/Loss", currency(portfolio_total_gl))
+secondary_metric_cols[2].metric("Holdings Basis Gap", currency(basis_gap_vs_contributions))
+secondary_metric_cols[3].metric("Cash Not Yet Deployed", currency(cash_sweep))
 
 income_metric_cols = st.columns(3)
 income_metric_cols[0].metric("Safe Monthly Income", currency(monthly_income_safe_total))
@@ -549,6 +627,7 @@ with summary_cols[0]:
             "qty",
             "avg_cost",
             "current_price",
+            "cost_basis_total",
             "market_value",
             "position_gain_loss",
             "actual_weight",
@@ -559,6 +638,7 @@ with summary_cols[0]:
         "Qty / Shares",
         "Avg Cost",
         "Current Price",
+        "Cost Basis",
         "Market Value",
         "Position G/L",
         "Actual %",
@@ -569,6 +649,7 @@ with summary_cols[0]:
                 "Qty / Shares": "{:,.3f}",
                 "Avg Cost": "${:,.2f}",
                 "Current Price": "${:,.2f}",
+                "Cost Basis": "${:,.2f}",
                 "Market Value": "${:,.2f}",
                 "Position G/L": "${:,.2f}",
                 "Actual %": "{:,.2f}%",
@@ -581,7 +662,15 @@ with summary_cols[0]:
 with summary_cols[1]:
     st.markdown("### Income Breakdown")
     income_table = portfolio_df[
-        ["ticker", "annual_income_safe", "annual_income_realistic", "annual_income_actual", "monthly_income_safe", "monthly_income_realistic", "monthly_income_actual"]
+        [
+            "ticker",
+            "annual_income_safe",
+            "annual_income_realistic",
+            "annual_income_actual",
+            "monthly_income_safe",
+            "monthly_income_realistic",
+            "monthly_income_actual",
+        ]
     ].copy()
     income_table.columns = [
         "Ticker",
@@ -666,16 +755,17 @@ st.dataframe(
 with st.expander("Important Notes"):
     st.write(
         """
-- **Add New Money** now sends new deposits into **FDRXX cash first**.
-- **Deploy Cash** moves money out of FDRXX and into a chosen ETF, which then increases shares and income.
-- **Position Gain / Loss** is calculated from each holding's own basis, much closer to Fidelity's logic.
+- **Add New Money** sends new deposits into **FDRXX cash first**.
+- **Deploy Cash** moves money out of FDRXX and into a chosen ETF, which then increases shares and updates cost basis.
+- **Cash Invested** = cost basis of all non-FDRXX positions. This fixes the old confusion between invested money and cash still sitting in sweep.
+- **Position Gain / Loss** is the sum of non-cash position gains/losses only, much closer to Fidelity's holding-level logic.
+- **Portfolio Total Gain/Loss** = total portfolio value minus total holdings cost basis, including cash.
+- **Holdings Cost Basis** is the table-implied basis. If your manual **Total Contributions** should match the holdings exactly, use **Sync Contributions to Basis**.
 - **Cash / Sweep** in FDRXX is treated as cash, not profit.
 - **FDRXX is excluded from Safe / Realistic / Actual income calculations** so cash does not dilute the portfolio income view.
-- **Total Contributions** tracks money you added to the account.
-- **Net vs Contributions** is separate from **Position Gain / Loss** so deposits do not get mislabeled as market gains.
-- **Safe / Realistic / Actual** income tiers are shown separately so the app does not default to one optimistic number.
-- **Goal Progress** now uses **Realistic Monthly Income**.
+- **Net vs Contributions** stays separate from **Position Gain / Loss** so deposits do not get mislabeled as market gains.
+- **Goal Progress** uses **Realistic Monthly Income**.
 - Live prices come from Yahoo Finance when available. If a live price fails, the app uses **Manual Price**.
-- If you update any quantity, avg cost, price, or yield to match Fidelity, the income and gain/loss math will update automatically.
+- If you update any quantity, avg cost, price, target weight, or yield to match Fidelity, the dashboard will recalculate automatically.
         """
     )

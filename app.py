@@ -119,6 +119,9 @@ def init_state() -> None:
             pd.DataFrame(DEFAULT_ROWS, columns=DEFAULT_COLUMNS)
         )
 
+    if "editor_df" not in st.session_state:
+        st.session_state.editor_df = st.session_state.portfolio_df.copy()
+
     if "cash_fdrxx" not in st.session_state:
         st.session_state.cash_fdrxx = float(DEFAULT_CASH_FDRXX)
 
@@ -133,6 +136,10 @@ def init_state() -> None:
 
     if "use_live_prices" not in st.session_state:
         st.session_state.use_live_prices = True
+
+
+def sync_editor_from_portfolio() -> None:
+    st.session_state.editor_df = normalize_portfolio_df(st.session_state.portfolio_df.copy())
 
 
 def get_live_prices(tickers: List[str]) -> Dict[str, float]:
@@ -300,7 +307,6 @@ def deploy_cash_to_position(ticker: str, dollars: float, calc_df: pd.DataFrame) 
         return
 
     shares_added = dollars / price_used
-
     match_idx = df.index[df["ticker"] == ticker].tolist()
 
     if match_idx:
@@ -334,6 +340,7 @@ def deploy_cash_to_position(ticker: str, dollars: float, calc_df: pd.DataFrame) 
         df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
 
     st.session_state.portfolio_df = normalize_portfolio_df(df)
+    sync_editor_from_portfolio()
     st.session_state.cash_fdrxx = available_cash - dollars
 
 
@@ -519,29 +526,36 @@ def render_metrics(calc: dict):
 
 def render_portfolio_editor():
     st.subheader("Portfolio Holdings")
+    st.caption("Edit the holdings, then click Save Holdings Changes.")
 
-    editor_source = st.session_state.portfolio_df.copy()
+    with st.form("portfolio_form", clear_on_submit=False):
+        edited_df = st.data_editor(
+            st.session_state.editor_df,
+            use_container_width=True,
+            num_rows="dynamic",
+            hide_index=True,
+            column_config={
+                "ticker": st.column_config.TextColumn("Ticker"),
+                "qty": st.column_config.NumberColumn("Qty", format="%.3f"),
+                "avg_cost": st.column_config.NumberColumn("Avg Cost", format="%.2f"),
+                "manual_price": st.column_config.NumberColumn("Manual Price", format="%.2f"),
+                "target_weight": st.column_config.NumberColumn("Target Weight %", format="%.2f"),
+                "annual_yield": st.column_config.NumberColumn("Annual Yield", format="%.4f"),
+                "payout_frequency": st.column_config.TextColumn("Payout Frequency"),
+                "payout_months": st.column_config.TextColumn("Payout Months"),
+                "notes": st.column_config.TextColumn("Notes"),
+            },
+            key="portfolio_editor_form",
+        )
 
-    edited_df = st.data_editor(
-        editor_source,
-        use_container_width=True,
-        num_rows="dynamic",
-        hide_index=True,
-        column_config={
-            "ticker": st.column_config.TextColumn("Ticker"),
-            "qty": st.column_config.NumberColumn("Qty", format="%.3f"),
-            "avg_cost": st.column_config.NumberColumn("Avg Cost", format="%.2f"),
-            "manual_price": st.column_config.NumberColumn("Manual Price", format="%.2f"),
-            "target_weight": st.column_config.NumberColumn("Target Weight %", format="%.2f"),
-            "annual_yield": st.column_config.NumberColumn("Annual Yield", format="%.4f"),
-            "payout_frequency": st.column_config.TextColumn("Payout Frequency"),
-            "payout_months": st.column_config.TextColumn("Payout Months"),
-            "notes": st.column_config.TextColumn("Notes"),
-        },
-        key="portfolio_editor",
-    )
+        save_pressed = st.form_submit_button("Save Holdings Changes", use_container_width=True)
 
-    st.session_state.portfolio_df = normalize_portfolio_df(edited_df)
+    if save_pressed:
+        cleaned = normalize_portfolio_df(edited_df)
+        st.session_state.portfolio_df = cleaned
+        st.session_state.editor_df = cleaned.copy()
+        st.success("Holdings updated.")
+        st.rerun()
 
 
 def render_deploy_cash(calc: dict):
@@ -716,8 +730,6 @@ def main():
         cash_fdrxx=float(st.session_state.cash_fdrxx),
         use_live_prices=bool(st.session_state.use_live_prices),
     )
-
-    st.session_state.portfolio_df = normalize_portfolio_df(st.session_state.portfolio_df)
 
     render_metrics(calc)
     st.markdown("---")

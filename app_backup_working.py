@@ -1,4 +1,6 @@
-import math
+import json
+import os
+from datetime import datetime
 from typing import Dict, List
 
 import pandas as pd
@@ -13,12 +15,10 @@ except Exception:
 st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵", layout="wide")
 
 GOAL_MONTHLY = 8000.0
-
-# Income tier multipliers:
-# Actual = raw portfolio yield math from the holdings
-# Realistic / Conservative = toned-down planning views
 REALISTIC_INCOME_FACTOR = 0.843
 CONSERVATIVE_INCOME_FACTOR = 0.632
+
+STATE_FILE = "retirement_dashboard_state.json"
 
 DEFAULT_COLUMNS = [
     "ticker",
@@ -35,20 +35,20 @@ DEFAULT_COLUMNS = [
 DEFAULT_ROWS = [
     ["AIPI", 668.196, 34.05, 33.79, 5.0, 0.124, "monthly", "all", ""],
     ["CHPY", 440.524, 56.07, 56.07, 6.0, 0.050, "monthly", "all", ""],
-    ["DIVO", 944.929, 44.82, 44.82, 10.0, 0.048, "monthly", "all", ""],
-    ["FEPI", 721.408, 40.55, 40.55, 7.0, 0.120, "monthly", "all", ""],
+    ["DIVO", 988.162, 44.82, 44.82, 10.0, 0.048, "monthly", "all", ""],
+    ["FEPI", 762.053, 40.55, 40.55, 7.0, 0.120, "monthly", "all", ""],
     ["GDXY", 3311.524, 13.11, 13.11, 15.0, 0.180, "monthly", "all", ""],
     ["IAU", 174.866, 84.64, 84.64, 4.0, 0.000, "none", "none", ""],
-    ["IWMI", 287.468, 48.01, 48.01, 4.0, 0.120, "monthly", "all", ""],
+    ["IWMI", 306.959, 48.01, 48.01, 4.0, 0.120, "monthly", "all", ""],
     ["IYRI", 314.264, 46.93, 46.93, 5.0, 0.080, "monthly", "all", ""],
-    ["MLPI", 260.204, 56.88, 56.88, 4.0, 0.080, "quarterly", "3,6,9,12", ""],
-    ["QQQI", 556.887, 50.55, 53.89, 10.0, 0.140, "monthly", "all", ""],
+    ["MLPI", 273.825, 56.88, 56.88, 4.0, 0.080, "quarterly", "3,6,9,12", ""],
+    ["QQQI", 598.751, 50.55, 53.89, 10.0, 0.140, "monthly", "all", ""],
     ["SPYI", 991.550, 49.67, 52.55, 12.0, 0.120, "monthly", "all", ""],
-    ["SVOL", 1463.811, 15.47, 15.93, 6.0, 0.160, "monthly", "all", ""],
-    ["TLTW", 927.268, 22.27, 22.57, 7.0, 0.120, "monthly", "all", ""],
+    ["SVOL", 1542.230, 15.47, 15.93, 6.0, 0.160, "monthly", "all", ""],
+    ["TLTW", 971.555, 22.27, 22.57, 7.0, 0.120, "monthly", "all", ""],
 ]
 
-DEFAULT_CASH_FDRXX = 18690.50
+DEFAULT_CASH_FDRXX = 8690.50
 
 SMART_INCOME_TIERS = {
     "tier_1": ["SPYI", "DIVO"],
@@ -93,60 +93,12 @@ def format_percent(value: float) -> str:
     return f"{value:,.1f}%"
 
 
-def init_state() -> None:
-    if "portfolio_df" not in st.session_state:
-        st.session_state.portfolio_df = pd.DataFrame(DEFAULT_ROWS, columns=DEFAULT_COLUMNS)
-
-    if "cash_fdrxx" not in st.session_state:
-        st.session_state.cash_fdrxx = DEFAULT_CASH_FDRXX
-
-    if "total_contributions" not in st.session_state:
-        starting_holdings_cost = float(
-            (st.session_state.portfolio_df["qty"].astype(float) * st.session_state.portfolio_df["avg_cost"].astype(float)).sum()
-        )
-        st.session_state.total_contributions = starting_holdings_cost + float(st.session_state.cash_fdrxx)
-
-    if "use_live_prices" not in st.session_state:
-        st.session_state.use_live_prices = True
+def round_money(value: float) -> float:
+    return round(float(value), 2)
 
 
-def get_live_prices(tickers: List[str]) -> Dict[str, float]:
-    prices: Dict[str, float] = {}
-    if yf is None or not tickers:
-        return prices
-
-    try:
-        joined = " ".join(sorted(set([t for t in tickers if str(t).strip()])))
-        data = yf.download(
-            joined,
-            period="5d",
-            interval="1d",
-            auto_adjust=False,
-            progress=False,
-            group_by="ticker",
-            threads=True,
-        )
-
-        if data is None or len(data) == 0:
-            return prices
-
-        if len(tickers) == 1:
-            close_series = data["Close"] if "Close" in data else None
-            if close_series is not None and len(close_series.dropna()) > 0:
-                prices[tickers[0]] = float(close_series.dropna().iloc[-1])
-            return prices
-
-        for ticker in tickers:
-            try:
-                close_series = data[ticker]["Close"]
-                if len(close_series.dropna()) > 0:
-                    prices[ticker] = float(close_series.dropna().iloc[-1])
-            except Exception:
-                continue
-    except Exception:
-        return prices
-
-    return prices
+def round_shares(value: float) -> float:
+    return round(float(value), 6)
 
 
 def normalize_portfolio_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -154,7 +106,10 @@ def normalize_portfolio_df(df: pd.DataFrame) -> pd.DataFrame:
 
     for col in DEFAULT_COLUMNS:
         if col not in out.columns:
-            out[col] = ""
+            if col in ["qty", "avg_cost", "manual_price", "target_weight", "annual_yield"]:
+                out[col] = 0.0
+            else:
+                out[col] = ""
 
     numeric_cols = ["qty", "avg_cost", "manual_price", "target_weight", "annual_yield"]
     for col in numeric_cols:
@@ -169,6 +124,176 @@ def normalize_portfolio_df(df: pd.DataFrame) -> pd.DataFrame:
     return out[DEFAULT_COLUMNS]
 
 
+def get_default_portfolio_df() -> pd.DataFrame:
+    return normalize_portfolio_df(pd.DataFrame(DEFAULT_ROWS, columns=DEFAULT_COLUMNS))
+
+
+def get_default_total_contributions(df: pd.DataFrame, cash_fdrxx: float) -> float:
+    holdings_cost = float((df["qty"].astype(float) * df["avg_cost"].astype(float)).sum())
+    return float(holdings_cost + cash_fdrxx)
+
+
+def is_valid_live_price(live_price: float) -> bool:
+    try:
+        return live_price is not None and not pd.isna(live_price) and float(live_price) > 0
+    except Exception:
+        return False
+
+
+def load_state() -> dict:
+    if not os.path.exists(STATE_FILE):
+        return {}
+
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+
+        portfolio_records = raw.get("portfolio_df", [])
+        if portfolio_records:
+            portfolio_df = normalize_portfolio_df(pd.DataFrame(portfolio_records))
+        else:
+            portfolio_df = get_default_portfolio_df()
+
+        cash_fdrxx = to_float(raw.get("cash_fdrxx", DEFAULT_CASH_FDRXX), DEFAULT_CASH_FDRXX)
+        total_contributions = to_float(
+            raw.get("total_contributions", get_default_total_contributions(portfolio_df, cash_fdrxx)),
+            get_default_total_contributions(portfolio_df, cash_fdrxx),
+        )
+        use_live_prices = bool(raw.get("use_live_prices", True))
+        last_price_sync = raw.get("last_price_sync", "")
+        auto_sync_prices = bool(raw.get("auto_sync_prices", True))
+
+        return {
+            "portfolio_df": portfolio_df,
+            "cash_fdrxx": cash_fdrxx,
+            "total_contributions": total_contributions,
+            "use_live_prices": use_live_prices,
+            "last_price_sync": last_price_sync,
+            "auto_sync_prices": auto_sync_prices,
+        }
+    except Exception:
+        return {}
+
+
+def save_state() -> None:
+    try:
+        df = normalize_portfolio_df(st.session_state.portfolio_df.copy())
+        payload = {
+            "portfolio_df": df.to_dict(orient="records"),
+            "cash_fdrxx": round_money(st.session_state.cash_fdrxx),
+            "total_contributions": round_money(st.session_state.total_contributions),
+            "use_live_prices": bool(st.session_state.use_live_prices),
+            "last_price_sync": st.session_state.last_price_sync,
+            "auto_sync_prices": bool(st.session_state.auto_sync_prices),
+        }
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+    except Exception:
+        pass
+
+
+def init_state() -> None:
+    if st.session_state.get("app_initialized", False):
+        return
+
+    loaded = load_state()
+
+    portfolio_df = loaded.get("portfolio_df", get_default_portfolio_df())
+    cash_fdrxx = to_float(loaded.get("cash_fdrxx", DEFAULT_CASH_FDRXX), DEFAULT_CASH_FDRXX)
+    total_contributions = to_float(
+        loaded.get("total_contributions", get_default_total_contributions(portfolio_df, cash_fdrxx)),
+        get_default_total_contributions(portfolio_df, cash_fdrxx),
+    )
+    use_live_prices = bool(loaded.get("use_live_prices", True))
+    last_price_sync = loaded.get("last_price_sync", "")
+    auto_sync_prices = bool(loaded.get("auto_sync_prices", True))
+
+    st.session_state.portfolio_df = normalize_portfolio_df(portfolio_df)
+    st.session_state.editor_df = normalize_portfolio_df(portfolio_df.copy())
+    st.session_state.cash_fdrxx = round_money(cash_fdrxx)
+    st.session_state.total_contributions = round_money(total_contributions)
+    st.session_state.use_live_prices = use_live_prices
+    st.session_state.last_price_sync = last_price_sync
+    st.session_state.auto_sync_prices = auto_sync_prices
+    st.session_state.app_initialized = True
+
+    save_state()
+
+
+def sync_editor_from_portfolio() -> None:
+    st.session_state.editor_df = normalize_portfolio_df(st.session_state.portfolio_df.copy())
+
+
+def get_live_prices(tickers: List[str]) -> Dict[str, float]:
+    prices: Dict[str, float] = {}
+    if yf is None or not tickers:
+        return prices
+
+    cleaned_tickers = [str(t).strip().upper() for t in tickers if str(t).strip()]
+    if not cleaned_tickers:
+        return prices
+
+    try:
+        unique_tickers = sorted(set(cleaned_tickers))
+        joined = " ".join(unique_tickers)
+        data = yf.download(
+            joined,
+            period="5d",
+            interval="1d",
+            auto_adjust=False,
+            progress=False,
+            group_by="ticker",
+            threads=True,
+        )
+
+        if data is None or len(data) == 0:
+            return prices
+
+        if len(unique_tickers) == 1:
+            close_series = data["Close"] if "Close" in data else None
+            if close_series is not None and len(close_series.dropna()) > 0:
+                prices[unique_tickers[0]] = float(close_series.dropna().iloc[-1])
+            return prices
+
+        for ticker in unique_tickers:
+            try:
+                close_series = data[ticker]["Close"]
+                if len(close_series.dropna()) > 0:
+                    prices[ticker] = float(close_series.dropna().iloc[-1])
+            except Exception:
+                continue
+    except Exception:
+        return prices
+
+    return prices
+
+
+def refresh_saved_manual_prices(calc_df: pd.DataFrame) -> None:
+    try:
+        df = normalize_portfolio_df(st.session_state.portfolio_df.copy())
+        updated = False
+
+        for _, row in calc_df.iterrows():
+            ticker = str(row["ticker"]).upper().strip()
+            source = str(row.get("price_source", "MANUAL"))
+            price_used = to_float(row.get("price_used", 0.0))
+
+            if source == "LIVE" and price_used > 0:
+                mask = df["ticker"] == ticker
+                if mask.any():
+                    old_val = to_float(df.loc[mask, "manual_price"].iloc[0], 0.0)
+                    if abs(old_val - price_used) > 0.0001:
+                        df.loc[mask, "manual_price"] = price_used
+                        updated = True
+
+        if updated:
+            st.session_state.portfolio_df = normalize_portfolio_df(df)
+            st.session_state.last_price_sync = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
+            save_state()
+    except Exception:
+        pass
+
+
 def calculate_portfolio(df: pd.DataFrame, cash_fdrxx: float, use_live_prices: bool):
     df = normalize_portfolio_df(df)
 
@@ -177,10 +302,23 @@ def calculate_portfolio(df: pd.DataFrame, cash_fdrxx: float, use_live_prices: bo
 
     working = df.copy()
     working["live_price"] = working["ticker"].map(live_prices).fillna(float("nan"))
-    working["price_used"] = working.apply(
-        lambda row: row["live_price"] if not pd.isna(row["live_price"]) and row["live_price"] > 0 else row["manual_price"],
-        axis=1,
-    )
+
+    price_used = []
+    price_sources = []
+
+    for _, row in working.iterrows():
+        live = row["live_price"]
+        manual = row["manual_price"]
+
+        if use_live_prices and is_valid_live_price(live):
+            price_used.append(float(live))
+            price_sources.append("LIVE")
+        else:
+            price_used.append(float(manual))
+            price_sources.append("MANUAL")
+
+    working["price_used"] = price_used
+    working["price_source"] = price_sources
 
     working["cost_basis"] = working["qty"] * working["avg_cost"]
     working["market_value"] = working["qty"] * working["price_used"]
@@ -195,11 +333,13 @@ def calculate_portfolio(df: pd.DataFrame, cash_fdrxx: float, use_live_prices: bo
 
     holdings_cost_basis = float(working["cost_basis"].sum())
     holdings_market_value = float(working["market_value"].sum())
-    invested_cost_basis = holdings_cost_basis + cash_fdrxx
-    total_portfolio_value = holdings_market_value + cash_fdrxx
+    cash_fdrxx = round_money(cash_fdrxx)
 
-    if st.session_state.total_contributions < invested_cost_basis:
-        st.session_state.total_contributions = invested_cost_basis
+    # THIS is the true total account value: holdings + cash
+    total_account_value = holdings_market_value + cash_fdrxx
+    total_contributions = float(st.session_state.total_contributions)
+    total_profit_loss = total_account_value - total_contributions
+    gain_loss_holdings_only = holdings_market_value - holdings_cost_basis
 
     total_annual_income_actual = float(working["annual_income_est"].sum())
     total_monthly_income_actual = total_annual_income_actual / 12.0
@@ -212,11 +352,9 @@ def calculate_portfolio(df: pd.DataFrame, cash_fdrxx: float, use_live_prices: bo
 
     income_goal_progress = (total_monthly_income_realistic / GOAL_MONTHLY) if GOAL_MONTHLY > 0 else 0.0
 
-    gain_loss_vs_basis = total_portfolio_value - invested_cost_basis
-
     total_target_weight = float(working["target_weight"].sum())
-    if total_target_weight > 0:
-        working["current_weight"] = working["market_value"] / holdings_market_value if holdings_market_value > 0 else 0.0
+    if total_target_weight > 0 and holdings_market_value > 0:
+        working["current_weight"] = working["market_value"] / holdings_market_value
         working["target_weight_decimal"] = working["target_weight"] / 100.0
         working["target_value"] = working["target_weight_decimal"] * holdings_market_value
         working["drift_dollars"] = working["market_value"] - working["target_value"]
@@ -228,14 +366,18 @@ def calculate_portfolio(df: pd.DataFrame, cash_fdrxx: float, use_live_prices: bo
         working["drift_dollars"] = 0.0
         working["drift_pct_points"] = 0.0
 
+    if use_live_prices and st.session_state.auto_sync_prices:
+        refresh_saved_manual_prices(working)
+
     return {
         "df": working,
         "holdings_cost_basis": holdings_cost_basis,
         "holdings_market_value": holdings_market_value,
-        "invested_cost_basis": invested_cost_basis,
-        "total_portfolio_value": total_portfolio_value,
+        "total_account_value": total_account_value,
         "cash_fdrxx": cash_fdrxx,
-        "gain_loss_vs_basis": gain_loss_vs_basis,
+        "total_contributions": total_contributions,
+        "total_profit_loss": total_profit_loss,
+        "gain_loss_holdings_only": gain_loss_holdings_only,
         "total_monthly_income_actual": total_monthly_income_actual,
         "total_annual_income_actual": total_annual_income_actual,
         "total_monthly_income_realistic": total_monthly_income_realistic,
@@ -247,10 +389,98 @@ def calculate_portfolio(df: pd.DataFrame, cash_fdrxx: float, use_live_prices: bo
 
 
 def add_new_money(amount: float) -> None:
+    amount = round_money(amount)
     if amount <= 0:
         return
-    st.session_state.cash_fdrxx = float(st.session_state.cash_fdrxx) + amount
-    st.session_state.total_contributions = float(st.session_state.total_contributions) + amount
+
+    st.session_state.cash_fdrxx = round_money(st.session_state.cash_fdrxx + amount)
+    st.session_state.total_contributions = round_money(st.session_state.total_contributions + amount)
+    save_state()
+
+
+def deploy_cash_to_position(ticker: str, dollars: float, calc_df: pd.DataFrame) -> None:
+    ticker = str(ticker).upper().strip()
+    dollars = round_money(dollars)
+
+    if ticker == "" or dollars <= 0:
+        return
+
+    available_cash = round_money(st.session_state.cash_fdrxx)
+    if dollars > available_cash:
+        st.error("Not enough FDRXX cash available for that deployment.")
+        return
+
+    before_total_value = round_money(float(calc_df["market_value"].sum()) + available_cash)
+
+    df = normalize_portfolio_df(st.session_state.portfolio_df.copy())
+
+    price_lookup = {
+        str(row["ticker"]).upper().strip(): to_float(row["price_used"])
+        for _, row in calc_df.iterrows()
+    }
+    manual_price_lookup = {
+        str(row["ticker"]).upper().strip(): to_float(row["manual_price"])
+        for _, row in df.iterrows()
+    }
+
+    price_used = price_lookup.get(ticker, 0.0)
+    if price_used <= 0:
+        price_used = manual_price_lookup.get(ticker, 0.0)
+
+    price_used = round(to_float(price_used), 6)
+
+    if price_used <= 0:
+        st.error(f"Could not determine a valid price for {ticker}.")
+        return
+
+    shares_added = round_shares(dollars / price_used)
+    match_idx = df.index[df["ticker"] == ticker].tolist()
+
+    if match_idx:
+        idx = match_idx[0]
+        old_qty = to_float(df.at[idx, "qty"])
+        old_avg_cost = to_float(df.at[idx, "avg_cost"])
+        old_cost_basis = old_qty * old_avg_cost
+
+        new_qty = round_shares(old_qty + shares_added)
+        new_cost_basis = old_cost_basis + dollars
+        new_avg_cost = round(new_cost_basis / new_qty, 6) if new_qty > 0 else 0.0
+
+        df.at[idx, "qty"] = new_qty
+        df.at[idx, "avg_cost"] = new_avg_cost
+        df.at[idx, "manual_price"] = round(price_used, 4)
+    else:
+        new_row = {
+            "ticker": ticker,
+            "qty": shares_added,
+            "avg_cost": round(price_used, 6),
+            "manual_price": round(price_used, 4),
+            "target_weight": 0.0,
+            "annual_yield": 0.0,
+            "payout_frequency": "monthly",
+            "payout_months": "all",
+            "notes": "Added from cash deployment",
+        }
+        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+
+    st.session_state.portfolio_df = normalize_portfolio_df(df)
+    sync_editor_from_portfolio()
+    st.session_state.cash_fdrxx = round_money(available_cash - dollars)
+
+    post_calc = calculate_portfolio(
+        st.session_state.portfolio_df,
+        cash_fdrxx=st.session_state.cash_fdrxx,
+        use_live_prices=bool(st.session_state.use_live_prices),
+    )
+    after_total_value = round_money(post_calc["total_account_value"])
+
+    if abs(after_total_value - before_total_value) > 0.05:
+        st.warning(
+            f"Transfer check: before deploy total was {format_dollars(before_total_value)} "
+            f"and after deploy total is {format_dollars(after_total_value)}."
+        )
+
+    save_state()
 
 
 def build_smarter_income_suggestions(df: pd.DataFrame, available_cash: float) -> pd.DataFrame:
@@ -285,7 +515,6 @@ def build_smarter_income_suggestions(df: pd.DataFrame, available_cash: float) ->
         if under_or_equal:
             return under_or_equal
 
-        # If an entire tier is overweight, allow the least overweight one(s)
         min_positive_drift = min(drift_map.get(t, 0.0) for t in valid)
         fallback = [t for t in valid if abs(drift_map.get(t, 0.0) - min_positive_drift) < 0.01]
         return fallback if fallback else valid
@@ -332,10 +561,21 @@ def render_top_controls():
     with left:
         use_live = st.checkbox(
             "Use Yahoo Finance live prices",
-            value=st.session_state.use_live_prices,
+            value=bool(st.session_state.use_live_prices),
             help="If Yahoo Finance is unavailable, the app falls back to Manual Price.",
         )
-        st.session_state.use_live_prices = use_live
+        if bool(use_live) != bool(st.session_state.use_live_prices):
+            st.session_state.use_live_prices = bool(use_live)
+            save_state()
+
+        auto_sync = st.checkbox(
+            "Auto-save good live prices",
+            value=bool(st.session_state.auto_sync_prices),
+            help="When a live price comes through, save it into Manual Price as your fallback.",
+        )
+        if bool(auto_sync) != bool(st.session_state.auto_sync_prices):
+            st.session_state.auto_sync_prices = bool(auto_sync)
+            save_state()
 
     with middle:
         cash_input = st.number_input(
@@ -345,7 +585,15 @@ def render_top_controls():
             step=100.0,
             format="%.2f",
         )
-        st.session_state.cash_fdrxx = cash_input
+        cash_input = round_money(cash_input)
+        if cash_input != round_money(st.session_state.cash_fdrxx):
+            st.session_state.cash_fdrxx = cash_input
+            save_state()
+
+        if st.button("🔄 Sync Prices Now", use_container_width=True):
+            st.session_state.last_price_sync = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
+            save_state()
+            st.rerun()
 
     with right:
         total_contrib_input = st.number_input(
@@ -354,26 +602,38 @@ def render_top_controls():
             value=float(st.session_state.total_contributions),
             step=100.0,
             format="%.2f",
-            help="Used internally for tracking new money added over time.",
+            help="This should only change when new outside money is added, or if you manually correct the starting total.",
         )
-        st.session_state.total_contributions = total_contrib_input
+        total_contrib_input = round_money(total_contrib_input)
+        if total_contrib_input != round_money(st.session_state.total_contributions):
+            st.session_state.total_contributions = total_contrib_input
+            save_state()
+
+        if st.session_state.last_price_sync:
+            st.caption(f"Last price sync: {st.session_state.last_price_sync}")
+        else:
+            st.caption("Last price sync: not yet saved")
 
     st.markdown("---")
 
     st.subheader("Add New Money")
     c1, c2, c3, c4, c5 = st.columns(5)
+
     with c1:
         if st.button("+ $1,000", use_container_width=True):
             add_new_money(1000.0)
             st.rerun()
+
     with c2:
         if st.button("+ $5,000", use_container_width=True):
             add_new_money(5000.0)
             st.rerun()
+
     with c3:
         if st.button("+ $10,000", use_container_width=True):
             add_new_money(10000.0)
             st.rerun()
+
     with c4:
         custom_add = st.number_input(
             "Custom",
@@ -384,6 +644,7 @@ def render_top_controls():
             label_visibility="collapsed",
             placeholder="Custom amount",
         )
+
     with c5:
         if st.button("Add Custom", use_container_width=True):
             add_new_money(float(custom_add))
@@ -391,67 +652,130 @@ def render_top_controls():
 
 
 def render_metrics(calc: dict):
-    a, b, c, d = st.columns(4)
-    e, f, g, h = st.columns(4)
+    st.markdown("## 📊 Portfolio Overview")
 
-    with a:
-        st.metric("Portfolio Value", format_dollars(calc["total_portfolio_value"]))
+    top1, top2, top3, top4, top5 = st.columns(5)
 
-    with b:
-        st.metric("Invested Cost Basis", format_dollars(calc["invested_cost_basis"]))
+    with top1:
+        st.metric("Total Account Value", format_dollars(calc["total_account_value"]))
 
-    with c:
-        st.metric("Gain / Loss vs Basis", format_dollars(calc["gain_loss_vs_basis"]))
+    with top2:
+        st.metric("Profit / Loss", format_dollars(calc["total_profit_loss"]))
 
-    with d:
+    with top3:
+        st.metric("Holdings Value", format_dollars(calc["holdings_market_value"]))
+
+    with top4:
         st.metric("Available Cash (FDRXX)", format_dollars(calc["cash_fdrxx"]))
 
-    with e:
-        st.metric("Monthly Income (Conservative)", format_dollars(calc["total_monthly_income_conservative"]))
+    with top5:
+        st.metric("Total Contributions", format_dollars(calc["total_contributions"]))
 
-    with f:
-        st.metric("Monthly Income (Realistic)", format_dollars(calc["total_monthly_income_realistic"]))
+    st.markdown("---")
 
-    with g:
-        st.metric("Monthly Income (Actual)", format_dollars(calc["total_monthly_income_actual"]))
+    st.subheader("Monthly Income")
+    m1, m2, m3 = st.columns(3)
 
-    with h:
-        st.metric("Holdings Cost Basis", format_dollars(calc["holdings_cost_basis"]))
+    with m1:
+        st.metric("Conservative", format_dollars(calc["total_monthly_income_conservative"]))
 
-    i, j, k = st.columns(3)
-    with i:
-        st.metric("Annual Income (Conservative)", format_dollars(calc["total_annual_income_conservative"]))
-    with j:
-        st.metric("Annual Income (Realistic)", format_dollars(calc["total_annual_income_realistic"]))
-    with k:
-        st.metric("Annual Income (Actual)", format_dollars(calc["total_annual_income_actual"]))
+    with m2:
+        st.metric("Realistic", format_dollars(calc["total_monthly_income_realistic"]))
+
+    with m3:
+        st.metric("Actual", format_dollars(calc["total_monthly_income_actual"]))
+
+    st.markdown("---")
+
+    st.subheader("Annual Income")
+    a1, a2, a3 = st.columns(3)
+
+    with a1:
+        st.metric("Conservative", format_dollars(calc["total_annual_income_conservative"]))
+
+    with a2:
+        st.metric("Realistic", format_dollars(calc["total_annual_income_realistic"]))
+
+    with a3:
+        st.metric("Actual", format_dollars(calc["total_annual_income_actual"]))
+
+    st.markdown("---")
 
     st.metric("Income Goal Progress", format_percent(calc["income_goal_progress"] * 100.0))
 
 
 def render_portfolio_editor():
     st.subheader("Portfolio Holdings")
+    st.caption("Edit the holdings, then click Save Holdings Changes.")
 
-    edited_df = st.data_editor(
-        st.session_state.portfolio_df,
-        use_container_width=True,
-        num_rows="dynamic",
-        hide_index=True,
-        column_config={
-            "ticker": st.column_config.TextColumn("Ticker"),
-            "qty": st.column_config.NumberColumn("Qty", format="%.3f"),
-            "avg_cost": st.column_config.NumberColumn("Avg Cost", format="%.2f"),
-            "manual_price": st.column_config.NumberColumn("Manual Price", format="%.2f"),
-            "target_weight": st.column_config.NumberColumn("Target Weight %", format="%.2f"),
-            "annual_yield": st.column_config.NumberColumn("Annual Yield", format="%.4f"),
-            "payout_frequency": st.column_config.TextColumn("Payout Frequency"),
-            "payout_months": st.column_config.TextColumn("Payout Months"),
-            "notes": st.column_config.TextColumn("Notes"),
-        },
-        key="portfolio_editor",
+    with st.form("portfolio_form", clear_on_submit=False):
+        edited_df = st.data_editor(
+            st.session_state.editor_df,
+            use_container_width=True,
+            num_rows="dynamic",
+            hide_index=True,
+            column_config={
+                "ticker": st.column_config.TextColumn("Ticker"),
+                "qty": st.column_config.NumberColumn("Qty", format="%.3f"),
+                "avg_cost": st.column_config.NumberColumn("Avg Cost", format="%.2f"),
+                "manual_price": st.column_config.NumberColumn("Manual Price", format="%.2f"),
+                "target_weight": st.column_config.NumberColumn("Target Weight %", format="%.2f"),
+                "annual_yield": st.column_config.NumberColumn("Annual Yield", format="%.4f"),
+                "payout_frequency": st.column_config.TextColumn("Payout Frequency"),
+                "payout_months": st.column_config.TextColumn("Payout Months"),
+                "notes": st.column_config.TextColumn("Notes"),
+            },
+            key="portfolio_editor_form",
+        )
+
+        save_pressed = st.form_submit_button("Save Holdings Changes", use_container_width=True)
+
+    if save_pressed:
+        cleaned = normalize_portfolio_df(edited_df)
+        st.session_state.portfolio_df = cleaned
+        st.session_state.editor_df = cleaned.copy()
+        save_state()
+        st.success("Holdings updated.")
+        st.rerun()
+
+
+def render_deploy_cash(calc: dict):
+    st.subheader("Deploy Cash Into a Position")
+
+    available_cash = float(st.session_state.cash_fdrxx)
+    ticker_options = sorted(calc["df"]["ticker"].astype(str).str.upper().tolist())
+
+    if not ticker_options:
+        st.info("No holdings available to deploy cash into yet.")
+        return
+
+    c1, c2, c3 = st.columns([1.3, 1.0, 0.9])
+
+    with c1:
+        deploy_ticker = st.selectbox("Ticker", options=ticker_options, key="deploy_ticker")
+
+    with c2:
+        deploy_amount = st.number_input(
+            "Amount to Deploy",
+            min_value=0.0,
+            max_value=available_cash if available_cash > 0 else 0.0,
+            value=0.0,
+            step=100.0,
+            format="%.2f",
+            key="deploy_amount",
+        )
+
+    with c3:
+        st.write("")
+        st.write("")
+        if st.button("Deploy Cash", use_container_width=True, disabled=available_cash <= 0):
+            deploy_cash_to_position(deploy_ticker, float(deploy_amount), calc["df"])
+            st.rerun()
+
+    st.caption(
+        "This moves money from FDRXX into the selected holding. "
+        "Cash goes down, holding shares go up, total contributions do not change."
     )
-
-    st.session_state.portfolio_df = normalize_portfolio_df(edited_df)
 
 
 def render_breakdowns(calc: dict):
@@ -462,7 +786,10 @@ def render_breakdowns(calc: dict):
             "ticker",
             "qty",
             "avg_cost",
+            "manual_price",
+            "live_price",
             "price_used",
+            "price_source",
             "cost_basis",
             "market_value",
             "gain_loss",
@@ -479,7 +806,10 @@ def render_breakdowns(calc: dict):
         "Ticker",
         "Qty",
         "Avg Cost",
+        "Manual Price",
+        "Live Price",
         "Price Used",
+        "Source",
         "Cost Basis",
         "Market Value",
         "Gain/Loss",
@@ -497,6 +827,8 @@ def render_breakdowns(calc: dict):
             {
                 "Qty": "{:,.3f}",
                 "Avg Cost": "${:,.2f}",
+                "Manual Price": "${:,.2f}",
+                "Live Price": "${:,.2f}",
                 "Price Used": "${:,.2f}",
                 "Cost Basis": "${:,.2f}",
                 "Market Value": "${:,.2f}",
@@ -514,8 +846,8 @@ def render_breakdowns(calc: dict):
     )
 
     st.subheader("Income Breakdown")
-    income_df = df[["ticker", "market_value", "annual_yield", "annual_income_est", "monthly_income_est"]].copy()
-    income_df.columns = ["Ticker", "Market Value", "Annual Yield", "Annual Income (Actual)", "Monthly Income (Actual)"]
+    income_df = df[["ticker", "market_value", "annual_yield", "annual_income_est", "monthly_income_est", "price_source"]].copy()
+    income_df.columns = ["Ticker", "Market Value", "Annual Yield", "Annual Income (Actual)", "Monthly Income (Actual)", "Price Source"]
     st.dataframe(
         income_df.style.format(
             {
@@ -574,6 +906,7 @@ def render_breakdowns(calc: dict):
 
 def main():
     init_state()
+
     render_top_controls()
     render_portfolio_editor()
 
@@ -583,9 +916,9 @@ def main():
         use_live_prices=bool(st.session_state.use_live_prices),
     )
 
-    st.session_state.portfolio_df = normalize_portfolio_df(st.session_state.portfolio_df)
-
     render_metrics(calc)
+    st.markdown("---")
+    render_deploy_cash(calc)
     st.markdown("---")
     render_breakdowns(calc)
 

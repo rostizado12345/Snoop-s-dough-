@@ -35,20 +35,20 @@ DEFAULT_COLUMNS = [
 DEFAULT_ROWS = [
     ["AIPI", 668.196, 34.05, 33.79, 5.0, 0.124, "monthly", "all", ""],
     ["CHPY", 440.524, 56.07, 56.07, 6.0, 0.050, "monthly", "all", ""],
-    ["DIVO", 944.929, 44.82, 44.82, 10.0, 0.048, "monthly", "all", ""],
-    ["FEPI", 721.408, 40.55, 40.55, 7.0, 0.120, "monthly", "all", ""],
+    ["DIVO", 988.162, 44.82, 44.82, 10.0, 0.048, "monthly", "all", ""],
+    ["FEPI", 762.053, 40.55, 40.55, 7.0, 0.120, "monthly", "all", ""],
     ["GDXY", 3311.524, 13.11, 13.11, 15.0, 0.180, "monthly", "all", ""],
     ["IAU", 174.866, 84.64, 84.64, 4.0, 0.000, "none", "none", ""],
-    ["IWMI", 287.468, 48.01, 48.01, 4.0, 0.120, "monthly", "all", ""],
+    ["IWMI", 306.959, 48.01, 48.01, 4.0, 0.120, "monthly", "all", ""],
     ["IYRI", 314.264, 46.93, 46.93, 5.0, 0.080, "monthly", "all", ""],
-    ["MLPI", 260.204, 56.88, 56.88, 4.0, 0.080, "quarterly", "3,6,9,12", ""],
-    ["QQQI", 556.887, 50.55, 53.89, 10.0, 0.140, "monthly", "all", ""],
+    ["MLPI", 273.825, 56.88, 56.88, 4.0, 0.080, "quarterly", "3,6,9,12", ""],
+    ["QQQI", 598.751, 50.55, 53.89, 10.0, 0.140, "monthly", "all", ""],
     ["SPYI", 991.550, 49.67, 52.55, 12.0, 0.120, "monthly", "all", ""],
-    ["SVOL", 1463.811, 15.47, 15.93, 6.0, 0.160, "monthly", "all", ""],
-    ["TLTW", 927.268, 22.27, 22.57, 7.0, 0.120, "monthly", "all", ""],
+    ["SVOL", 1542.230, 15.47, 15.93, 6.0, 0.160, "monthly", "all", ""],
+    ["TLTW", 971.555, 22.27, 22.57, 7.0, 0.120, "monthly", "all", ""],
 ]
 
-DEFAULT_CASH_FDRXX = 18690.50
+DEFAULT_CASH_FDRXX = 8690.50
 
 SMART_INCOME_TIERS = {
     "tier_1": ["SPYI", "DIVO"],
@@ -581,40 +581,51 @@ def render_top_controls():
 
 
 def render_metrics(calc: dict):
-    a, b, c, d = st.columns(4)
-    e, f, g, h = st.columns(4)
+    st.markdown("## 📊 Portfolio Overview")
 
-    with a:
+    top1, top2, top3, top4 = st.columns(4)
+
+    with top1:
         st.metric("Portfolio Value", format_dollars(calc["total_portfolio_value"]))
 
-    with b:
-        st.metric("Invested Cost Basis", format_dollars(calc["invested_cost_basis"]))
-
-    with c:
+    with top2:
         st.metric("Net vs Contributions", format_dollars(calc["net_vs_contributions"]))
 
-    with d:
+    with top3:
         st.metric("Available Cash (FDRXX)", format_dollars(calc["cash_fdrxx"]))
 
-    with e:
-        st.metric("Monthly Income (Conservative)", format_dollars(calc["total_monthly_income_conservative"]))
-
-    with f:
-        st.metric("Monthly Income (Realistic)", format_dollars(calc["total_monthly_income_realistic"]))
-
-    with g:
-        st.metric("Monthly Income (Actual)", format_dollars(calc["total_monthly_income_actual"]))
-
-    with h:
+    with top4:
         st.metric("Total Contributions", format_dollars(calc["total_contributions"]))
 
-    i, j, k = st.columns(3)
-    with i:
-        st.metric("Annual Income (Conservative)", format_dollars(calc["total_annual_income_conservative"]))
-    with j:
-        st.metric("Annual Income (Realistic)", format_dollars(calc["total_annual_income_realistic"]))
-    with k:
-        st.metric("Annual Income (Actual)", format_dollars(calc["total_annual_income_actual"]))
+    st.markdown("---")
+
+    st.subheader("Monthly Income")
+    m1, m2, m3 = st.columns(3)
+
+    with m1:
+        st.metric("Conservative", format_dollars(calc["total_monthly_income_conservative"]))
+
+    with m2:
+        st.metric("Realistic", format_dollars(calc["total_monthly_income_realistic"]))
+
+    with m3:
+        st.metric("Actual", format_dollars(calc["total_monthly_income_actual"]))
+
+    st.markdown("---")
+
+    st.subheader("Annual Income")
+    a1, a2, a3 = st.columns(3)
+
+    with a1:
+        st.metric("Conservative", format_dollars(calc["total_annual_income_conservative"]))
+
+    with a2:
+        st.metric("Realistic", format_dollars(calc["total_annual_income_realistic"]))
+
+    with a3:
+        st.metric("Actual", format_dollars(calc["total_annual_income_actual"]))
+
+    st.markdown("---")
 
     st.metric("Income Goal Progress", format_percent(calc["income_goal_progress"] * 100.0))
 
@@ -653,7 +664,6 @@ def render_portfolio_editor():
         st.success("Holdings updated.")
         st.rerun()
     else:
-        # keep editor aligned with portfolio after reruns so saved values do not appear to jump back
         if not st.session_state.editor_df.equals(st.session_state.portfolio_df):
             pass
 

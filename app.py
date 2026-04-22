@@ -24,27 +24,44 @@ CASH_PRICE = 1.00
 DEFAULT_STARTING_CONTRIBUTIONS = 369000.00
 DEFAULT_STARTING_CASH = 18690.64
 
-# Option A:
-# - Actual = raw user-entered yield math
-# - Realistic = capped planning yield
-# - Conservative = capped planning yield * safety factor
+# Option A logic:
+# - Actual = raw current yield math
+# - Realistic = planning capped yield
+# - Conservative = planning capped yield with haircut
 CONSERVATIVE_FACTOR = 0.75
 
-# Planning caps by ticker
 SAFE_YIELD_CAPS = {
     "AIPI": 0.25,
     "CHPY": 0.12,
+    "DIVO": 0.045,
     "FEPI": 0.18,
     "GDXY": 0.22,
+    "IAU": 0.00,
+    "IWMI": 0.12,
+    "IYRI": 0.08,
+    "MLPI": 0.08,
     "QQQI": 0.12,
     "SPYI": 0.10,
     "SVOL": 0.12,
     "TLTW": 0.15,
-    "IWMI": 0.12,
-    "IYRI": 0.08,
-    "MLPI": 0.08,
-    "DIVO": 0.045,
-    "IAU": 0.00,
+}
+
+# Fallback prices from your Fidelity screenshots.
+# These are used if Yahoo fails or returns zero/blank.
+BASELINE_LAST_PRICES = {
+    "AIPI": 35.1981,
+    "CHPY": 64.4992,
+    "DIVO": 45.84,
+    "FEPI": 42.2055,
+    "GDXY": 13.75,
+    "IAU": 88.04,
+    "IWMI": 50.5280,
+    "IYRI": 49.3591,
+    "MLPI": 53.9833,
+    "QQQI": 53.0503,
+    "SPYI": 51.7653,
+    "SVOL": 15.91,
+    "TLTW": 22.49,
 }
 
 HOLDING_COLUMNS = [
@@ -76,8 +93,18 @@ ALLOWED_TX_TYPES = [
 ]
 
 MONTH_NAMES = {
-    1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
-    7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec",
+    1: "Jan",
+    2: "Feb",
+    3: "Mar",
+    4: "Apr",
+    5: "May",
+    6: "Jun",
+    7: "Jul",
+    8: "Aug",
+    9: "Sep",
+    10: "Oct",
+    11: "Nov",
+    12: "Dec",
 }
 
 # ============================================================
@@ -102,7 +129,7 @@ STARTING_HOLDINGS_ROWS = [
 # ============================================================
 # HELPERS
 # ============================================================
-def safe_float(value, default=0.0) -> float:
+def safe_float(value, default: float = 0.0) -> float:
     try:
         if value is None:
             return float(default)
@@ -137,9 +164,9 @@ def parse_months(value: str) -> List[int]:
     for part in text.split(","):
         part = part.strip()
         if part.isdigit():
-            m = int(part)
-            if 1 <= m <= 12:
-                months.append(m)
+            month_num = int(part)
+            if 1 <= month_num <= 12:
+                months.append(month_num)
     return sorted(list(set(months)))
 
 
@@ -226,13 +253,17 @@ def fetch_prices(tickers: Tuple[str, ...]) -> Dict[str, float]:
                     if ticker in data.columns.get_level_values(0):
                         close_series = data[ticker]["Close"].dropna()
                         if not close_series.empty:
-                            prices[ticker] = float(close_series.iloc[-1])
+                            price = safe_float(close_series.iloc[-1], 0.0)
+                            if price > 0:
+                                prices[ticker] = price
                 except Exception:
                     pass
         else:
             close_series = data["Close"].dropna()
             if not close_series.empty and len(tickers) == 1:
-                prices[tickers[0]] = float(close_series.iloc[-1])
+                price = safe_float(close_series.iloc[-1], 0.0)
+                if price > 0:
+                    prices[tickers[0]] = price
     except Exception:
         pass
 
@@ -240,11 +271,18 @@ def fetch_prices(tickers: Tuple[str, ...]) -> Dict[str, float]:
 
 
 def get_effective_price(row: pd.Series, live_prices: Dict[str, float]) -> float:
-    manual_price = safe_float(row.get("manual_price", 0.0))
     ticker = clean_ticker(row.get("ticker", ""))
+    manual_price = safe_float(row.get("manual_price", 0.0))
+    live_price = safe_float(live_prices.get(ticker, 0.0))
+    baseline_price = safe_float(BASELINE_LAST_PRICES.get(ticker, 0.0))
+
     if manual_price > 0:
         return manual_price
-    return safe_float(live_prices.get(ticker, 0.0))
+    if live_price > 0:
+        return live_price
+    if baseline_price > 0:
+        return baseline_price
+    return 0.0
 
 
 def get_capped_yield(ticker: str, raw_yield: float) -> float:
@@ -256,17 +294,21 @@ def get_capped_yield(ticker: str, raw_yield: float) -> float:
 def build_valuation_df(holdings_df: pd.DataFrame) -> pd.DataFrame:
     if holdings_df.empty:
         out = holdings_df.copy()
-        out["price"] = pd.Series(dtype=float)
-        out["cost_basis"] = pd.Series(dtype=float)
-        out["market_value"] = pd.Series(dtype=float)
-        out["position_gain_loss"] = pd.Series(dtype=float)
-        out["capped_yield"] = pd.Series(dtype=float)
-        out["actual_monthly_income"] = pd.Series(dtype=float)
-        out["actual_annual_income"] = pd.Series(dtype=float)
-        out["realistic_monthly_income"] = pd.Series(dtype=float)
-        out["realistic_annual_income"] = pd.Series(dtype=float)
-        out["conservative_monthly_income"] = pd.Series(dtype=float)
-        out["conservative_annual_income"] = pd.Series(dtype=float)
+        extra_cols = [
+            "price",
+            "cost_basis",
+            "market_value",
+            "position_gain_loss",
+            "capped_yield",
+            "actual_monthly_income",
+            "actual_annual_income",
+            "realistic_monthly_income",
+            "realistic_annual_income",
+            "conservative_monthly_income",
+            "conservative_annual_income",
+        ]
+        for col in extra_cols:
+            out[col] = pd.Series(dtype=float)
         return out
 
     tickers = tuple(sorted([t for t in holdings_df["ticker"].tolist() if t]))
@@ -282,15 +324,12 @@ def build_valuation_df(holdings_df: pd.DataFrame) -> pd.DataFrame:
         axis=1,
     )
 
-    # Actual = raw current yield math
     df["actual_annual_income"] = df["market_value"] * df["annual_yield"]
     df["actual_monthly_income"] = df["actual_annual_income"] / 12.0
 
-    # Realistic = capped planning yield
     df["realistic_annual_income"] = df["market_value"] * df["capped_yield"]
     df["realistic_monthly_income"] = df["realistic_annual_income"] / 12.0
 
-    # Conservative = capped planning yield with safety haircut
     df["conservative_annual_income"] = df["realistic_annual_income"] * CONSERVATIVE_FACTOR
     df["conservative_monthly_income"] = df["conservative_annual_income"] / 12.0
 
@@ -334,6 +373,7 @@ def build_monthly_schedule(df: pd.DataFrame) -> pd.DataFrame:
             actual_annual = safe_float(row.get("actual_annual_income", 0.0))
             realistic_annual = safe_float(row.get("realistic_annual_income", 0.0))
             conservative_annual = safe_float(row.get("conservative_annual_income", 0.0))
+
             freq = str(row.get("payout_frequency", "")).strip().lower()
             payout_months = parse_months(row.get("payout_months", ""))
 
@@ -345,7 +385,6 @@ def build_monthly_schedule(df: pd.DataFrame) -> pd.DataFrame:
                 actual_month_income = actual_annual / 12.0
                 realistic_month_income = realistic_annual / 12.0
                 conservative_month_income = conservative_annual / 12.0
-
             elif freq in {"quarterly", "semiannual", "annual"}:
                 if month in payout_months and len(payout_months) > 0:
                     actual_month_income = actual_annual / len(payout_months)
@@ -360,15 +399,21 @@ def build_monthly_schedule(df: pd.DataFrame) -> pd.DataFrame:
             {
                 "Month": MONTH_NAMES[month],
                 "Conservative": conservative,
-                "Actual": actual,
                 "Realistic": realistic,
+                "Actual": actual,
             }
         )
 
     return pd.DataFrame(rows)
 
 
-def validate_state(valuation_df, cash_value, total_account_value, total_contributions, profit_loss) -> List[str]:
+def validate_state(
+    valuation_df: pd.DataFrame,
+    cash_value: float,
+    total_account_value: float,
+    total_contributions: float,
+    profit_loss: float,
+) -> List[str]:
     errors = []
 
     holdings_value = valuation_df["market_value"].sum() if not valuation_df.empty else 0.0
@@ -389,6 +434,8 @@ def validate_state(valuation_df, cash_value, total_account_value, total_contribu
             errors.append("One or more holdings have negative quantity.")
         if (valuation_df["avg_cost"] < -0.000001).any():
             errors.append("One or more holdings have negative average cost.")
+        if (valuation_df["price"] < -0.000001).any():
+            errors.append("One or more holdings have negative price.")
 
     return errors
 
@@ -500,7 +547,7 @@ def build_snapshot_json() -> str:
         "holdings": st.session_state["holdings_df"].to_dict(orient="records"),
         "transactions": st.session_state["transactions_df"].to_dict(orient="records"),
         "exported_at": datetime.now().isoformat(),
-        "version": 3,
+        "version": 4,
     }
     return json.dumps(payload, indent=2)
 
@@ -548,7 +595,9 @@ st.session_state["transactions_df"] = normalize_tx_df(st.session_state["transact
 # HEADER
 # ============================================================
 st.title("💵 Retirement Paycheck Dashboard")
-st.caption("Fidelity holdings restored • FDRXX handled as cash • Actual income shown raw • Realistic and Conservative use planning caps")
+st.caption(
+    "Full Fidelity baseline restored • FDRXX treated as cash • price fallback added so a ticker cannot zero-out just because Yahoo misses a quote"
+)
 
 # ============================================================
 # SIDEBAR
@@ -605,8 +654,8 @@ with st.sidebar:
         "- Withdrawal = money leaves the tracked account\n\n"
         "Income tiers:\n"
         "- Actual = raw current yield math\n"
-        "- Realistic = planning caps\n"
-        "- Conservative = planning caps with extra safety haircut"
+        "- Realistic = capped planning yields\n"
+        "- Conservative = capped planning yields with extra haircut"
     )
 
 # ============================================================
@@ -727,7 +776,7 @@ edited_holdings = st.data_editor(
         "ticker": st.column_config.TextColumn("Ticker"),
         "qty": st.column_config.NumberColumn("Qty", format="%.6f"),
         "avg_cost": st.column_config.NumberColumn("Avg Cost", format="%.4f"),
-        "manual_price": st.column_config.NumberColumn("Manual Price", format="%.4f"),
+        "manual_price": st.column_config.NumberColumn("Manual Price Override", format="%.4f"),
         "target_weight": st.column_config.NumberColumn("Target Weight %", format="%.2f"),
         "annual_yield": st.column_config.NumberColumn("Raw Annual Yield", format="%.4f"),
         "payout_frequency": st.column_config.SelectboxColumn(
@@ -781,7 +830,6 @@ with c_tx2:
 # ============================================================
 holdings_df = normalize_holdings_df(st.session_state["holdings_df"])
 tx_df = normalize_tx_df(st.session_state["transactions_df"])
-
 valuation_df = build_valuation_df(holdings_df)
 
 cash_value, total_contributions = compute_cash_and_contributions(
@@ -807,7 +855,6 @@ conservative_monthly_income = valuation_df["conservative_monthly_income"].sum() 
 conservative_annual_income = valuation_df["conservative_annual_income"].sum() if not valuation_df.empty else 0.0
 
 goal_progress = min(max(realistic_monthly_income / GOAL_MONTHLY, 0.0), 1.0) if GOAL_MONTHLY > 0 else 0.0
-
 validation_errors = validate_state(
     valuation_df=valuation_df,
     cash_value=cash_value,
@@ -897,6 +944,13 @@ else:
         lambda w: holdings_value * (safe_float(w) / 100.0)
     )
     detail_df["Dollar Gap"] = detail_df["Target $"] - detail_df["market_value"]
+    detail_df["Price Source"] = detail_df["ticker"].apply(
+        lambda t: "Manual Override"
+        if safe_float(
+            detail_df.loc[detail_df["ticker"] == t, "manual_price"].iloc[0], 0.0
+        ) > 0
+        else ("Yahoo/Live or Fidelity Fallback")
+    )
 
     display_cols = [
         "ticker",
@@ -920,6 +974,8 @@ else:
         "actual_annual_income",
         "payout_frequency",
         "payout_months",
+        "manual_price",
+        "Price Source",
         "notes",
     ]
 
@@ -933,6 +989,7 @@ else:
             "conservative_annual_income": "Conservative Annual Income",
             "realistic_annual_income": "Realistic Annual Income",
             "actual_annual_income": "Actual Annual Income",
+            "manual_price": "Manual Price Override",
         }
     )
 
@@ -977,5 +1034,6 @@ else:
 st.divider()
 st.caption(
     f"{CASH_TICKER} is excluded from holdings value and excluded from income calculations. "
-    "Actual income uses your raw entered yields. Realistic and Conservative use capped planning yields."
+    "Actual income uses raw yields. Realistic and Conservative use planning caps. "
+    "If Yahoo fails to return a live quote, the app falls back to your Fidelity baseline price so a holding does not drop to zero."
 )

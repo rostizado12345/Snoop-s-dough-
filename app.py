@@ -18,14 +18,34 @@ st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵",
 # ============================================================
 GOAL_MONTHLY = 8000.0
 
-REALISTIC_INCOME_FACTOR = 0.843
-CONSERVATIVE_INCOME_FACTOR = 0.632
-
 CASH_TICKER = "FDRXX"
 CASH_PRICE = 1.00
 
 DEFAULT_STARTING_CONTRIBUTIONS = 369000.00
 DEFAULT_STARTING_CASH = 18690.64
+
+# Option A:
+# - Actual = raw user-entered yield math
+# - Realistic = capped planning yield
+# - Conservative = capped planning yield * safety factor
+CONSERVATIVE_FACTOR = 0.75
+
+# Planning caps by ticker
+SAFE_YIELD_CAPS = {
+    "AIPI": 0.25,
+    "CHPY": 0.12,
+    "FEPI": 0.18,
+    "GDXY": 0.22,
+    "QQQI": 0.12,
+    "SPYI": 0.10,
+    "SVOL": 0.12,
+    "TLTW": 0.15,
+    "IWMI": 0.12,
+    "IYRI": 0.08,
+    "MLPI": 0.08,
+    "DIVO": 0.045,
+    "IAU": 0.00,
+}
 
 HOLDING_COLUMNS = [
     "ticker",
@@ -138,7 +158,6 @@ def normalize_holdings_df(df: pd.DataFrame) -> pd.DataFrame:
             work[col] = ""
 
     work = work[HOLDING_COLUMNS].copy()
-
     work["ticker"] = work["ticker"].apply(clean_ticker)
     work = work[work["ticker"] != ""].copy()
     work = work[work["ticker"] != CASH_TICKER].copy()
@@ -228,6 +247,12 @@ def get_effective_price(row: pd.Series, live_prices: Dict[str, float]) -> float:
     return safe_float(live_prices.get(ticker, 0.0))
 
 
+def get_capped_yield(ticker: str, raw_yield: float) -> float:
+    ticker = clean_ticker(ticker)
+    cap = SAFE_YIELD_CAPS.get(ticker, raw_yield)
+    return min(raw_yield, cap)
+
+
 def build_valuation_df(holdings_df: pd.DataFrame) -> pd.DataFrame:
     if holdings_df.empty:
         out = holdings_df.copy()
@@ -235,6 +260,13 @@ def build_valuation_df(holdings_df: pd.DataFrame) -> pd.DataFrame:
         out["cost_basis"] = pd.Series(dtype=float)
         out["market_value"] = pd.Series(dtype=float)
         out["position_gain_loss"] = pd.Series(dtype=float)
+        out["capped_yield"] = pd.Series(dtype=float)
+        out["actual_monthly_income"] = pd.Series(dtype=float)
+        out["actual_annual_income"] = pd.Series(dtype=float)
+        out["realistic_monthly_income"] = pd.Series(dtype=float)
+        out["realistic_annual_income"] = pd.Series(dtype=float)
+        out["conservative_monthly_income"] = pd.Series(dtype=float)
+        out["conservative_annual_income"] = pd.Series(dtype=float)
         return out
 
     tickers = tuple(sorted([t for t in holdings_df["ticker"].tolist() if t]))
@@ -245,6 +277,23 @@ def build_valuation_df(holdings_df: pd.DataFrame) -> pd.DataFrame:
     df["cost_basis"] = df["qty"] * df["avg_cost"]
     df["market_value"] = df["qty"] * df["price"]
     df["position_gain_loss"] = df["market_value"] - df["cost_basis"]
+    df["capped_yield"] = df.apply(
+        lambda row: get_capped_yield(clean_ticker(row["ticker"]), safe_float(row["annual_yield"])),
+        axis=1,
+    )
+
+    # Actual = raw current yield math
+    df["actual_annual_income"] = df["market_value"] * df["annual_yield"]
+    df["actual_monthly_income"] = df["actual_annual_income"] / 12.0
+
+    # Realistic = capped planning yield
+    df["realistic_annual_income"] = df["market_value"] * df["capped_yield"]
+    df["realistic_monthly_income"] = df["realistic_annual_income"] / 12.0
+
+    # Conservative = capped planning yield with safety haircut
+    df["conservative_annual_income"] = df["realistic_annual_income"] * CONSERVATIVE_FACTOR
+    df["conservative_monthly_income"] = df["conservative_annual_income"] / 12.0
+
     return df
 
 
@@ -273,18 +322,6 @@ def compute_cash_and_contributions(starting_cash: float, starting_contributions:
     return cash, contributions
 
 
-def annual_income_from_row(row: pd.Series) -> float:
-    annual_yield = safe_float(row.get("annual_yield", 0.0))
-    market_value = safe_float(row.get("market_value", 0.0))
-    if annual_yield <= 0 or market_value <= 0:
-        return 0.0
-    return market_value * annual_yield
-
-
-def monthly_income_from_row(row: pd.Series) -> float:
-    return annual_income_from_row(row) / 12.0
-
-
 def build_monthly_schedule(df: pd.DataFrame) -> pd.DataFrame:
     rows = []
 
@@ -294,30 +331,37 @@ def build_monthly_schedule(df: pd.DataFrame) -> pd.DataFrame:
         conservative = 0.0
 
         for _, row in df.iterrows():
-            annual_income = annual_income_from_row(row)
+            actual_annual = safe_float(row.get("actual_annual_income", 0.0))
+            realistic_annual = safe_float(row.get("realistic_annual_income", 0.0))
+            conservative_annual = safe_float(row.get("conservative_annual_income", 0.0))
             freq = str(row.get("payout_frequency", "")).strip().lower()
             payout_months = parse_months(row.get("payout_months", ""))
 
-            if annual_income <= 0:
-                continue
+            actual_month_income = 0.0
+            realistic_month_income = 0.0
+            conservative_month_income = 0.0
 
-            month_income = 0.0
             if freq == "monthly":
-                month_income = annual_income / 12.0
+                actual_month_income = actual_annual / 12.0
+                realistic_month_income = realistic_annual / 12.0
+                conservative_month_income = conservative_annual / 12.0
+
             elif freq in {"quarterly", "semiannual", "annual"}:
                 if month in payout_months and len(payout_months) > 0:
-                    month_income = annual_income / len(payout_months)
+                    actual_month_income = actual_annual / len(payout_months)
+                    realistic_month_income = realistic_annual / len(payout_months)
+                    conservative_month_income = conservative_annual / len(payout_months)
 
-            actual += month_income
-            realistic += month_income * REALISTIC_INCOME_FACTOR
-            conservative += month_income * CONSERVATIVE_INCOME_FACTOR
+            actual += actual_month_income
+            realistic += realistic_month_income
+            conservative += conservative_month_income
 
         rows.append(
             {
                 "Month": MONTH_NAMES[month],
                 "Conservative": conservative,
-                "Realistic": realistic,
                 "Actual": actual,
+                "Realistic": realistic,
             }
         )
 
@@ -456,7 +500,7 @@ def build_snapshot_json() -> str:
         "holdings": st.session_state["holdings_df"].to_dict(orient="records"),
         "transactions": st.session_state["transactions_df"].to_dict(orient="records"),
         "exported_at": datetime.now().isoformat(),
-        "version": 2,
+        "version": 3,
     }
     return json.dumps(payload, indent=2)
 
@@ -504,7 +548,7 @@ st.session_state["transactions_df"] = normalize_tx_df(st.session_state["transact
 # HEADER
 # ============================================================
 st.title("💵 Retirement Paycheck Dashboard")
-st.caption("Real Fidelity holdings restored • FDRXX treated as cash • contributions and cash ledger separated correctly")
+st.caption("Fidelity holdings restored • FDRXX handled as cash • Actual income shown raw • Realistic and Conservative use planning caps")
 
 # ============================================================
 # SIDEBAR
@@ -558,7 +602,11 @@ with st.sidebar:
         "- Add New Money = outside money enters account\n"
         "- Deploy Cash = existing FDRXX cash buys a holding\n"
         "- Sell To Cash = holding turns into FDRXX cash\n"
-        "- Withdrawal = money leaves the tracked account"
+        "- Withdrawal = money leaves the tracked account\n\n"
+        "Income tiers:\n"
+        "- Actual = raw current yield math\n"
+        "- Realistic = planning caps\n"
+        "- Conservative = planning caps with extra safety haircut"
     )
 
 # ============================================================
@@ -681,7 +729,7 @@ edited_holdings = st.data_editor(
         "avg_cost": st.column_config.NumberColumn("Avg Cost", format="%.4f"),
         "manual_price": st.column_config.NumberColumn("Manual Price", format="%.4f"),
         "target_weight": st.column_config.NumberColumn("Target Weight %", format="%.2f"),
-        "annual_yield": st.column_config.NumberColumn("Annual Yield", format="%.4f"),
+        "annual_yield": st.column_config.NumberColumn("Raw Annual Yield", format="%.4f"),
         "payout_frequency": st.column_config.SelectboxColumn(
             "Payout Frequency",
             options=["none", "monthly", "quarterly", "semiannual", "annual"],
@@ -749,13 +797,14 @@ holdings_gain_loss = valuation_df["position_gain_loss"].sum() if not valuation_d
 total_account_value = holdings_value + cash_value
 profit_loss = total_account_value - total_contributions
 
-actual_monthly_income = sum(monthly_income_from_row(row) for _, row in valuation_df.iterrows())
-realistic_monthly_income = actual_monthly_income * REALISTIC_INCOME_FACTOR
-conservative_monthly_income = actual_monthly_income * CONSERVATIVE_INCOME_FACTOR
+actual_monthly_income = valuation_df["actual_monthly_income"].sum() if not valuation_df.empty else 0.0
+actual_annual_income = valuation_df["actual_annual_income"].sum() if not valuation_df.empty else 0.0
 
-actual_annual_income = actual_monthly_income * 12.0
-realistic_annual_income = realistic_monthly_income * 12.0
-conservative_annual_income = conservative_monthly_income * 12.0
+realistic_monthly_income = valuation_df["realistic_monthly_income"].sum() if not valuation_df.empty else 0.0
+realistic_annual_income = valuation_df["realistic_annual_income"].sum() if not valuation_df.empty else 0.0
+
+conservative_monthly_income = valuation_df["conservative_monthly_income"].sum() if not valuation_df.empty else 0.0
+conservative_annual_income = valuation_df["conservative_annual_income"].sum() if not valuation_df.empty else 0.0
 
 goal_progress = min(max(realistic_monthly_income / GOAL_MONTHLY, 0.0), 1.0) if GOAL_MONTHLY > 0 else 0.0
 
@@ -848,8 +897,6 @@ else:
         lambda w: holdings_value * (safe_float(w) / 100.0)
     )
     detail_df["Dollar Gap"] = detail_df["Target $"] - detail_df["market_value"]
-    detail_df["Monthly Income"] = detail_df.apply(monthly_income_from_row, axis=1)
-    detail_df["Annual Income"] = detail_df.apply(annual_income_from_row, axis=1)
 
     display_cols = [
         "ticker",
@@ -864,15 +911,33 @@ else:
         "Target $",
         "Dollar Gap",
         "annual_yield",
-        "Monthly Income",
-        "Annual Income",
+        "capped_yield",
+        "conservative_monthly_income",
+        "realistic_monthly_income",
+        "actual_monthly_income",
+        "conservative_annual_income",
+        "realistic_annual_income",
+        "actual_annual_income",
         "payout_frequency",
         "payout_months",
         "notes",
     ]
 
+    renamed_df = detail_df[display_cols].rename(
+        columns={
+            "annual_yield": "raw_annual_yield",
+            "capped_yield": "planning_capped_yield",
+            "conservative_monthly_income": "Conservative Monthly Income",
+            "realistic_monthly_income": "Realistic Monthly Income",
+            "actual_monthly_income": "Actual Monthly Income",
+            "conservative_annual_income": "Conservative Annual Income",
+            "realistic_annual_income": "Realistic Annual Income",
+            "actual_annual_income": "Actual Annual Income",
+        }
+    )
+
     st.dataframe(
-        detail_df[display_cols],
+        renamed_df,
         use_container_width=True,
         hide_index=True,
     )
@@ -912,5 +977,5 @@ else:
 st.divider()
 st.caption(
     f"{CASH_TICKER} is excluded from holdings value and excluded from income calculations. "
-    "All totals are derived fresh on each run. The ledger controls future cash and contribution math."
+    "Actual income uses your raw entered yields. Realistic and Conservative use capped planning yields."
 )

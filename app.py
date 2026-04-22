@@ -1,6 +1,4 @@
-import io
 import json
-import math
 from datetime import datetime
 from typing import Dict, List, Tuple
 
@@ -13,21 +11,13 @@ except Exception:
     yf = None
 
 
-# ============================================================
-# PAGE CONFIG
-# ============================================================
-st.set_page_config(
-    page_title="Retirement Paycheck Dashboard",
-    page_icon="💵",
-    layout="wide",
-)
+st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵", layout="wide")
 
 # ============================================================
 # CONSTANTS
 # ============================================================
 GOAL_MONTHLY = 8000.0
 
-# Income tier multipliers
 REALISTIC_INCOME_FACTOR = 0.843
 CONSERVATIVE_INCOME_FACTOR = 0.632
 
@@ -35,9 +25,9 @@ CASH_TICKER = "FDRXX"
 CASH_PRICE = 1.00
 
 DEFAULT_STARTING_CONTRIBUTIONS = 369000.00
-DEFAULT_STARTING_CASH = 18690.50
+DEFAULT_STARTING_CASH = 18690.64
 
-DEFAULT_COLUMNS = [
+HOLDING_COLUMNS = [
     "ticker",
     "qty",
     "avg_cost",
@@ -47,22 +37,6 @@ DEFAULT_COLUMNS = [
     "payout_frequency",
     "payout_months",
     "notes",
-]
-
-DEFAULT_ROWS = [
-    ["AIPI", 0.0, 0.0, 0.0, 5.0, 0.3500, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
-    ["CHPY", 0.0, 0.0, 0.0, 6.0, 0.1800, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
-    ["DIVO", 0.0, 0.0, 0.0, 10.0, 0.0450, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
-    ["FEPI", 0.0, 0.0, 0.0, 7.0, 0.2400, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
-    ["GDXY", 0.0, 0.0, 0.0, 15.0, 0.3200, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
-    ["IAU", 0.0, 0.0, 0.0, 4.0, 0.0000, "none", "", ""],
-    ["IYRI", 0.0, 0.0, 0.0, 5.0, 0.0800, "quarterly", "3,6,9,12", ""],
-    ["IWMI", 0.0, 0.0, 0.0, 4.0, 0.1200, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
-    ["MLPI", 0.0, 0.0, 0.0, 4.0, 0.0800, "quarterly", "2,5,8,11", ""],
-    ["QQQI", 0.0, 0.0, 0.0, 10.0, 0.1450, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
-    ["SPYI", 0.0, 0.0, 0.0, 12.0, 0.1200, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
-    ["SVOL", 0.0, 0.0, 0.0, 6.0, 0.1600, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
-    ["TLTW", 0.0, 0.0, 0.0, 7.0, 0.1500, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
 ]
 
 TX_COLUMNS = [
@@ -75,10 +49,10 @@ TX_COLUMNS = [
 ]
 
 ALLOWED_TX_TYPES = [
-    "contribution",   # money added from outside the tracked account
-    "withdrawal",     # money removed from the tracked account
-    "deploy_cash",    # cash used to buy a holding
-    "sell_to_cash",   # sell a holding and move proceeds to cash
+    "contribution",
+    "withdrawal",
+    "deploy_cash",
+    "sell_to_cash",
 ]
 
 MONTH_NAMES = {
@@ -86,23 +60,51 @@ MONTH_NAMES = {
     7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec",
 }
 
+# ============================================================
+# REAL HOLDINGS RECONSTRUCTED FROM YOUR FIDELITY SCREENSHOTS
+# ============================================================
+STARTING_HOLDINGS_ROWS = [
+    ["AIPI", 668.196, 34.05, 0.0, 6.12, 0.3500, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
+    ["CHPY", 440.524, 56.07, 0.0, 7.39, 0.1800, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
+    ["DIVO", 988.162, 44.88, 0.0, 11.79, 0.0450, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
+    ["FEPI", 762.053, 40.68, 0.0, 8.37, 0.2400, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
+    ["GDXY", 3311.524, 13.11, 0.0, 11.85, 0.3200, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
+    ["IAU", 174.866, 84.64, 0.0, 4.01, 0.0000, "none", "", ""],
+    ["IWMI", 306.959, 48.21, 0.0, 4.04, 0.1200, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
+    ["IYRI", 314.264, 46.93, 0.0, 4.04, 0.0800, "quarterly", "3,6,9,12", ""],
+    ["MLPI", 273.825, 56.79, 0.0, 3.85, 0.0800, "quarterly", "2,5,8,11", ""],
+    ["QQQI", 598.751, 50.77, 0.0, 8.27, 0.1450, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
+    ["SPYI", 991.55, 49.67, 0.0, 13.36, 0.1200, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
+    ["SVOL", 1542.23, 15.50, 0.0, 6.38, 0.1600, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
+    ["TLTW", 971.555, 22.28, 0.0, 5.69, 0.1500, "monthly", "1,2,3,4,5,6,7,8,9,10,11,12", ""],
+]
 
 # ============================================================
 # HELPERS
 # ============================================================
 def safe_float(value, default=0.0) -> float:
     try:
-        if value is None or (isinstance(value, str) and value.strip() == ""):
+        if value is None:
+            return float(default)
+        if isinstance(value, str) and value.strip() == "":
             return float(default)
         return float(value)
     except Exception:
         return float(default)
 
 
-def clean_ticker(value: str) -> str:
+def clean_ticker(value) -> str:
     if value is None:
         return ""
     return str(value).strip().upper()
+
+
+def format_money(value: float) -> str:
+    return f"${value:,.2f}"
+
+
+def today_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
 
 
 def parse_months(value: str) -> List[int]:
@@ -121,67 +123,68 @@ def parse_months(value: str) -> List[int]:
     return sorted(list(set(months)))
 
 
-def format_money(value: float) -> str:
-    return f"${value:,.2f}"
-
-
-def today_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
+def make_empty_holdings_df() -> pd.DataFrame:
+    return pd.DataFrame(columns=HOLDING_COLUMNS)
 
 
 def normalize_holdings_df(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
-        df = pd.DataFrame(DEFAULT_ROWS, columns=DEFAULT_COLUMNS)
+        return make_empty_holdings_df()
 
-    for col in DEFAULT_COLUMNS:
-        if col not in df.columns:
-            df[col] = ""
+    work = df.copy()
 
-    df = df[DEFAULT_COLUMNS].copy()
+    for col in HOLDING_COLUMNS:
+        if col not in work.columns:
+            work[col] = ""
 
-    # normalize data
-    df["ticker"] = df["ticker"].apply(clean_ticker)
-    df = df[df["ticker"] != ""].copy()
-    df = df[df["ticker"] != CASH_TICKER].copy()
+    work = work[HOLDING_COLUMNS].copy()
+
+    work["ticker"] = work["ticker"].apply(clean_ticker)
+    work = work[work["ticker"] != ""].copy()
+    work = work[work["ticker"] != CASH_TICKER].copy()
 
     numeric_cols = ["qty", "avg_cost", "manual_price", "target_weight", "annual_yield"]
     for col in numeric_cols:
-        df[col] = df[col].apply(safe_float)
+        work[col] = work[col].apply(safe_float)
 
     text_cols = ["payout_frequency", "payout_months", "notes"]
     for col in text_cols:
-        df[col] = df[col].fillna("").astype(str)
+        work[col] = work[col].fillna("").astype(str)
 
-    df = df.drop_duplicates(subset=["ticker"], keep="first").reset_index(drop=True)
-    return df
+    work = work.drop_duplicates(subset=["ticker"], keep="first").reset_index(drop=True)
+    return work
 
 
 def normalize_tx_df(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=TX_COLUMNS)
 
+    work = df.copy()
+
     for col in TX_COLUMNS:
-        if col not in df.columns:
-            df[col] = ""
+        if col not in work.columns:
+            work[col] = ""
 
-    df = df[TX_COLUMNS].copy()
-    df["date"] = df["date"].fillna("").astype(str)
-    df["type"] = df["type"].fillna("").astype(str)
-    df["ticker"] = df["ticker"].fillna("").astype(str).apply(clean_ticker)
-    df["notes"] = df["notes"].fillna("").astype(str)
-    df["amount"] = df["amount"].apply(safe_float)
-    df["price"] = df["price"].apply(safe_float)
+    work = work[TX_COLUMNS].copy()
+    work["date"] = work["date"].fillna("").astype(str)
+    work["type"] = work["type"].fillna("").astype(str)
+    work["ticker"] = work["ticker"].fillna("").astype(str).apply(clean_ticker)
+    work["notes"] = work["notes"].fillna("").astype(str)
+    work["amount"] = work["amount"].apply(safe_float)
+    work["price"] = work["price"].apply(safe_float)
 
-    df = df[df["type"].isin(ALLOWED_TX_TYPES)].reset_index(drop=True)
-    return df
+    work = work[work["type"].isin(ALLOWED_TX_TYPES)].reset_index(drop=True)
+    return work
+
+
+def build_starting_holdings_df() -> pd.DataFrame:
+    return normalize_holdings_df(pd.DataFrame(STARTING_HOLDINGS_ROWS, columns=HOLDING_COLUMNS))
 
 
 @st.cache_data(show_spinner=False, ttl=900)
 def fetch_prices(tickers: Tuple[str, ...]) -> Dict[str, float]:
     prices: Dict[str, float] = {}
-    if not tickers:
-        return prices
-    if yf is None:
+    if not tickers or yf is None:
         return prices
 
     try:
@@ -198,18 +201,16 @@ def fetch_prices(tickers: Tuple[str, ...]) -> Dict[str, float]:
         return prices
 
     try:
-        # Multi-ticker
         if isinstance(data.columns, pd.MultiIndex):
-            for t in tickers:
+            for ticker in tickers:
                 try:
-                    if t in data.columns.get_level_values(0):
-                        close_series = data[t]["Close"].dropna()
+                    if ticker in data.columns.get_level_values(0):
+                        close_series = data[ticker]["Close"].dropna()
                         if not close_series.empty:
-                            prices[t] = float(close_series.iloc[-1])
+                            prices[ticker] = float(close_series.iloc[-1])
                 except Exception:
                     pass
         else:
-            # Single ticker
             close_series = data["Close"].dropna()
             if not close_series.empty and len(tickers) == 1:
                 prices[tickers[0]] = float(close_series.iloc[-1])
@@ -228,18 +229,18 @@ def get_effective_price(row: pd.Series, live_prices: Dict[str, float]) -> float:
 
 
 def build_valuation_df(holdings_df: pd.DataFrame) -> pd.DataFrame:
-    tickers = tuple(sorted([t for t in holdings_df["ticker"].astype(str).tolist() if t]))
+    if holdings_df.empty:
+        out = holdings_df.copy()
+        out["price"] = pd.Series(dtype=float)
+        out["cost_basis"] = pd.Series(dtype=float)
+        out["market_value"] = pd.Series(dtype=float)
+        out["position_gain_loss"] = pd.Series(dtype=float)
+        return out
+
+    tickers = tuple(sorted([t for t in holdings_df["ticker"].tolist() if t]))
     live_prices = fetch_prices(tickers)
 
     df = holdings_df.copy()
-
-    df["ticker"] = df["ticker"].apply(clean_ticker)
-    df["qty"] = df["qty"].apply(safe_float)
-    df["avg_cost"] = df["avg_cost"].apply(safe_float)
-    df["manual_price"] = df["manual_price"].apply(safe_float)
-    df["target_weight"] = df["target_weight"].apply(safe_float)
-    df["annual_yield"] = df["annual_yield"].apply(safe_float)
-
     df["price"] = df.apply(lambda row: get_effective_price(row, live_prices), axis=1)
     df["cost_basis"] = df["qty"] * df["avg_cost"]
     df["market_value"] = df["qty"] * df["price"]
@@ -247,48 +248,29 @@ def build_valuation_df(holdings_df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def compute_cash_and_contributions(
-    starting_cash: float,
-    starting_contributions: float,
-    tx_df: pd.DataFrame,
-) -> Tuple[float, float]:
+def compute_cash_and_contributions(starting_cash: float, starting_contributions: float, tx_df: pd.DataFrame):
     cash = safe_float(starting_cash)
-    net_contributions = safe_float(starting_contributions)
+    contributions = safe_float(starting_contributions)
 
     if tx_df.empty:
-        return cash, net_contributions
+        return cash, contributions
 
     for _, row in tx_df.iterrows():
         tx_type = str(row["type"]).strip()
-        amount = safe_float(row["amount"])
-
-        if amount < 0:
-            amount = abs(amount)
+        amount = abs(safe_float(row["amount"]))
 
         if tx_type == "contribution":
             cash += amount
-            net_contributions += amount
-
+            contributions += amount
         elif tx_type == "withdrawal":
             cash -= amount
-            net_contributions -= amount
-
+            contributions -= amount
         elif tx_type == "deploy_cash":
             cash -= amount
-
         elif tx_type == "sell_to_cash":
             cash += amount
 
-    return cash, net_contributions
-
-
-def monthly_income_from_row(row: pd.Series) -> float:
-    annual_yield = safe_float(row.get("annual_yield", 0.0))
-    market_value = safe_float(row.get("market_value", 0.0))
-    if annual_yield <= 0 or market_value <= 0:
-        return 0.0
-    annual_income = market_value * annual_yield
-    return annual_income / 12.0
+    return cash, contributions
 
 
 def annual_income_from_row(row: pd.Series) -> float:
@@ -299,8 +281,13 @@ def annual_income_from_row(row: pd.Series) -> float:
     return market_value * annual_yield
 
 
+def monthly_income_from_row(row: pd.Series) -> float:
+    return annual_income_from_row(row) / 12.0
+
+
 def build_monthly_schedule(df: pd.DataFrame) -> pd.DataFrame:
-    schedule = []
+    rows = []
+
     for month in range(1, 13):
         actual = 0.0
         realistic = 0.0
@@ -314,31 +301,18 @@ def build_monthly_schedule(df: pd.DataFrame) -> pd.DataFrame:
             if annual_income <= 0:
                 continue
 
+            month_income = 0.0
             if freq == "monthly":
                 month_income = annual_income / 12.0
-            elif freq == "quarterly":
-                if month in payout_months:
-                    month_income = annual_income / max(len(payout_months), 1)
-                else:
-                    month_income = 0.0
-            elif freq == "semiannual":
-                if month in payout_months:
-                    month_income = annual_income / max(len(payout_months), 1)
-                else:
-                    month_income = 0.0
-            elif freq == "annual":
-                if month in payout_months:
-                    month_income = annual_income / max(len(payout_months), 1)
-                else:
-                    month_income = 0.0
-            else:
-                month_income = 0.0
+            elif freq in {"quarterly", "semiannual", "annual"}:
+                if month in payout_months and len(payout_months) > 0:
+                    month_income = annual_income / len(payout_months)
 
             actual += month_income
             realistic += month_income * REALISTIC_INCOME_FACTOR
             conservative += month_income * CONSERVATIVE_INCOME_FACTOR
 
-        schedule.append(
+        rows.append(
             {
                 "Month": MONTH_NAMES[month],
                 "Conservative": conservative,
@@ -347,16 +321,10 @@ def build_monthly_schedule(df: pd.DataFrame) -> pd.DataFrame:
             }
         )
 
-    return pd.DataFrame(schedule)
+    return pd.DataFrame(rows)
 
 
-def validate_state(
-    valuation_df: pd.DataFrame,
-    cash_value: float,
-    total_account_value: float,
-    total_contributions: float,
-    profit_loss: float,
-) -> List[str]:
+def validate_state(valuation_df, cash_value, total_account_value, total_contributions, profit_loss) -> List[str]:
     errors = []
 
     holdings_value = valuation_df["market_value"].sum() if not valuation_df.empty else 0.0
@@ -364,23 +332,19 @@ def validate_state(
     recomputed_profit = recomputed_total - total_contributions
 
     if cash_value < -0.005:
-        errors.append("Available cash went negative. A deploy or withdrawal is larger than available cash.")
+        errors.append("Available cash went negative.")
 
     if abs(total_account_value - recomputed_total) > 0.01:
-        errors.append("Total account value does not equal holdings value plus cash.")
+        errors.append("Total account value does not equal holdings plus cash.")
 
     if abs(profit_loss - recomputed_profit) > 0.01:
-        errors.append("Profit/loss does not equal total account value minus total contributions.")
+        errors.append("Profit/loss does not equal total account value minus contributions.")
 
     if not valuation_df.empty:
         if (valuation_df["qty"] < -0.000001).any():
             errors.append("One or more holdings have negative quantity.")
         if (valuation_df["avg_cost"] < -0.000001).any():
             errors.append("One or more holdings have negative average cost.")
-        if (valuation_df["price"] < -0.000001).any():
-            errors.append("One or more holdings have negative price.")
-        if (valuation_df["annual_yield"] < -0.000001).any():
-            errors.append("One or more holdings have negative annual yield.")
 
     return errors
 
@@ -492,7 +456,7 @@ def build_snapshot_json() -> str:
         "holdings": st.session_state["holdings_df"].to_dict(orient="records"),
         "transactions": st.session_state["transactions_df"].to_dict(orient="records"),
         "exported_at": datetime.now().isoformat(),
-        "version": 1,
+        "version": 2,
     }
     return json.dumps(payload, indent=2)
 
@@ -511,6 +475,13 @@ def load_snapshot_json(uploaded_bytes: bytes):
     st.session_state["transactions_df"] = normalize_tx_df(transactions)
 
 
+def reset_to_fidelity_baseline():
+    st.session_state["starting_cash"] = DEFAULT_STARTING_CASH
+    st.session_state["starting_contributions"] = DEFAULT_STARTING_CONTRIBUTIONS
+    st.session_state["holdings_df"] = build_starting_holdings_df()
+    st.session_state["transactions_df"] = pd.DataFrame(columns=TX_COLUMNS)
+
+
 # ============================================================
 # SESSION STATE INIT
 # ============================================================
@@ -521,24 +492,29 @@ if "starting_contributions" not in st.session_state:
     st.session_state["starting_contributions"] = DEFAULT_STARTING_CONTRIBUTIONS
 
 if "holdings_df" not in st.session_state:
-    st.session_state["holdings_df"] = normalize_holdings_df(pd.DataFrame(DEFAULT_ROWS, columns=DEFAULT_COLUMNS))
+    st.session_state["holdings_df"] = build_starting_holdings_df()
 
 if "transactions_df" not in st.session_state:
-    st.session_state["transactions_df"] = normalize_tx_df(pd.DataFrame(columns=TX_COLUMNS))
+    st.session_state["transactions_df"] = pd.DataFrame(columns=TX_COLUMNS)
 
+st.session_state["holdings_df"] = normalize_holdings_df(st.session_state["holdings_df"])
+st.session_state["transactions_df"] = normalize_tx_df(st.session_state["transactions_df"])
 
 # ============================================================
 # HEADER
 # ============================================================
 st.title("💵 Retirement Paycheck Dashboard")
-st.caption("Locked cash logic • ledger-driven contributions • FDRXX handled as dedicated cash, not a normal holding")
-
+st.caption("Real Fidelity holdings restored • FDRXX treated as cash • contributions and cash ledger separated correctly")
 
 # ============================================================
-# SIDEBAR - SNAPSHOT / SYSTEM TOOLS
+# SIDEBAR
 # ============================================================
 with st.sidebar:
     st.header("System Tools")
+
+    if st.button("Reset to Fidelity Baseline", use_container_width=True):
+        reset_to_fidelity_baseline()
+        st.success("Reset to Fidelity baseline complete.")
 
     snapshot_json = build_snapshot_json()
     st.download_button(
@@ -566,37 +542,33 @@ with st.sidebar:
         value=safe_float(st.session_state["starting_contributions"]),
         step=1000.0,
         format="%.2f",
-        help="This is the starting net amount contributed to the tracked account before any new ledger events below.",
     )
+
     st.session_state["starting_cash"] = st.number_input(
         f"Starting Available Cash ({CASH_TICKER})",
         min_value=0.0,
         value=safe_float(st.session_state["starting_cash"]),
         step=1000.0,
         format="%.2f",
-        help=f"This is the starting cash sweep value for {CASH_TICKER} before any new ledger events below.",
     )
 
     st.divider()
     st.info(
-        "Rule of thumb:\n\n"
+        "Rules:\n\n"
         "- Add New Money = outside money enters account\n"
-        "- Deploy Cash = existing cash buys a holding\n"
-        "- Sell to Cash = holding becomes cash\n"
-        "- Withdrawal = money leaves account"
+        "- Deploy Cash = existing FDRXX cash buys a holding\n"
+        "- Sell To Cash = holding turns into FDRXX cash\n"
+        "- Withdrawal = money leaves the tracked account"
     )
 
-
 # ============================================================
-# ACTION PANEL
+# ACTIONS
 # ============================================================
 st.subheader("Cash Flow Actions")
 
-action_tab1, action_tab2, action_tab3, action_tab4 = st.tabs(
-    ["Add New Money", "Deploy Cash", "Sell To Cash", "Withdraw Money"]
-)
+tab1, tab2, tab3, tab4 = st.tabs(["Add New Money", "Deploy Cash", "Sell To Cash", "Withdraw Money"])
 
-with action_tab1:
+with tab1:
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         if st.button("+ $1,000", use_container_width=True):
@@ -618,27 +590,25 @@ with action_tab1:
         if submitted:
             add_transaction("contribution", add_amount, notes=add_notes)
 
-with action_tab2:
-    current_cash_preview, current_contrib_preview = compute_cash_and_contributions(
+with tab2:
+    preview_cash, _ = compute_cash_and_contributions(
         st.session_state["starting_cash"],
         st.session_state["starting_contributions"],
         st.session_state["transactions_df"],
     )
-    st.write(f"Available cash right now: **{format_money(current_cash_preview)}**")
+    st.write(f"Available cash right now: **{format_money(preview_cash)}**")
 
-    deploy_ticker = st.selectbox(
-        "Deploy cash into ticker",
-        options=sorted(st.session_state["holdings_df"]["ticker"].tolist()),
-        index=0 if not st.session_state["holdings_df"].empty else None,
-    ) if not st.session_state["holdings_df"].empty else st.text_input("Ticker", value="")
+    ticker_options = sorted(st.session_state["holdings_df"]["ticker"].tolist())
+    deploy_ticker = st.selectbox("Deploy cash into ticker", options=ticker_options)
 
     with st.form("deploy_cash_form"):
         deploy_amount = st.number_input("Deploy Amount", min_value=0.0, value=0.0, step=1000.0, format="%.2f")
         deploy_price = st.number_input("Execution Price", min_value=0.0, value=0.0, step=0.01, format="%.4f")
         deploy_notes = st.text_input("Notes ", value="")
         deploy_submit = st.form_submit_button("Deploy Cash")
+
         if deploy_submit:
-            if deploy_amount > current_cash_preview + 1e-9:
+            if deploy_amount > preview_cash + 1e-9:
                 st.error("Cannot deploy more cash than is available.")
             else:
                 if upsert_holding_purchase(str(deploy_ticker), deploy_amount, deploy_price):
@@ -650,48 +620,47 @@ with action_tab2:
                         notes=deploy_notes,
                     )
 
-with action_tab3:
-    if st.session_state["holdings_df"].empty:
-        st.info("No holdings available to sell.")
-    else:
-        sell_ticker = st.selectbox(
-            "Sell ticker into cash",
-            options=sorted(st.session_state["holdings_df"]["ticker"].tolist()),
-            key="sell_ticker_select",
-        )
-        with st.form("sell_to_cash_form"):
-            sell_amount = st.number_input("Sale Amount", min_value=0.0, value=0.0, step=1000.0, format="%.2f")
-            sell_price = st.number_input("Sale Price", min_value=0.0, value=0.0, step=0.01, format="%.4f")
-            sell_notes = st.text_input("Sale Notes", value="")
-            sell_submit = st.form_submit_button("Sell To Cash")
-            if sell_submit:
-                if reduce_holding_sale(str(sell_ticker), sell_amount, sell_price):
-                    add_transaction(
-                        "sell_to_cash",
-                        sell_amount,
-                        ticker=str(sell_ticker),
-                        price=sell_price,
-                        notes=sell_notes,
-                    )
+with tab3:
+    sell_ticker = st.selectbox(
+        "Sell ticker into cash",
+        options=sorted(st.session_state["holdings_df"]["ticker"].tolist()),
+        key="sell_ticker_select",
+    )
 
-with action_tab4:
-    current_cash_preview_2, _ = compute_cash_and_contributions(
+    with st.form("sell_to_cash_form"):
+        sell_amount = st.number_input("Sale Amount", min_value=0.0, value=0.0, step=1000.0, format="%.2f")
+        sell_price = st.number_input("Sale Price", min_value=0.0, value=0.0, step=0.01, format="%.4f")
+        sell_notes = st.text_input("Sale Notes", value="")
+        sell_submit = st.form_submit_button("Sell To Cash")
+
+        if sell_submit:
+            if reduce_holding_sale(str(sell_ticker), sell_amount, sell_price):
+                add_transaction(
+                    "sell_to_cash",
+                    sell_amount,
+                    ticker=str(sell_ticker),
+                    price=sell_price,
+                    notes=sell_notes,
+                )
+
+with tab4:
+    preview_cash_2, _ = compute_cash_and_contributions(
         st.session_state["starting_cash"],
         st.session_state["starting_contributions"],
         st.session_state["transactions_df"],
     )
-    st.write(f"Available cash right now: **{format_money(current_cash_preview_2)}**")
+    st.write(f"Available cash right now: **{format_money(preview_cash_2)}**")
 
     with st.form("withdrawal_form"):
         withdrawal_amount = st.number_input("Withdrawal Amount", min_value=0.0, value=0.0, step=1000.0, format="%.2f")
         withdrawal_notes = st.text_input("Withdrawal Notes", value="")
         withdrawal_submit = st.form_submit_button("Withdraw Money")
+
         if withdrawal_submit:
-            if withdrawal_amount > current_cash_preview_2 + 1e-9:
+            if withdrawal_amount > preview_cash_2 + 1e-9:
                 st.error("Cannot withdraw more cash than is available.")
             else:
                 add_transaction("withdrawal", withdrawal_amount, notes=withdrawal_notes)
-
 
 # ============================================================
 # HOLDINGS EDITOR
@@ -726,13 +695,12 @@ if st.button("Save Holdings Table", use_container_width=True):
     st.session_state["holdings_df"] = normalize_holdings_df(edited_holdings)
     st.success("Holdings saved.")
 
-
 # ============================================================
 # TRANSACTION LEDGER
 # ============================================================
 st.divider()
 st.subheader("Transaction Ledger")
-st.caption("This is the source of truth for cash movement and contributions.")
+st.caption("This is the source of truth for future cash movement and contributions.")
 
 edited_tx = st.data_editor(
     st.session_state["transactions_df"],
@@ -760,7 +728,6 @@ with c_tx2:
         st.session_state["transactions_df"] = pd.DataFrame(columns=TX_COLUMNS)
         st.success("Ledger cleared.")
 
-
 # ============================================================
 # CALCULATIONS
 # ============================================================
@@ -777,7 +744,7 @@ cash_value, total_contributions = compute_cash_and_contributions(
 
 holdings_value = valuation_df["market_value"].sum() if not valuation_df.empty else 0.0
 invested_cost_basis = valuation_df["cost_basis"].sum() if not valuation_df.empty else 0.0
-position_gain_loss = valuation_df["position_gain_loss"].sum() if not valuation_df.empty else 0.0
+holdings_gain_loss = valuation_df["position_gain_loss"].sum() if not valuation_df.empty else 0.0
 
 total_account_value = holdings_value + cash_value
 profit_loss = total_account_value - total_contributions
@@ -800,6 +767,8 @@ validation_errors = validate_state(
     profit_loss=profit_loss,
 )
 
+schedule_df = build_monthly_schedule(valuation_df)
+
 # ============================================================
 # RECONCILIATION STATUS
 # ============================================================
@@ -815,10 +784,13 @@ else:
 
 r1, r2 = st.columns(2)
 with r1:
-    st.write(f"**Holdings + Cash** = {format_money(holdings_value)} + {format_money(cash_value)} = **{format_money(total_account_value)}**")
+    st.write(
+        f"**Holdings + Cash** = {format_money(holdings_value)} + {format_money(cash_value)} = **{format_money(total_account_value)}**"
+    )
 with r2:
-    st.write(f"**Total - Contributions** = {format_money(total_account_value)} - {format_money(total_contributions)} = **{format_money(profit_loss)}**")
-
+    st.write(
+        f"**Total - Contributions** = {format_money(total_account_value)} - {format_money(total_contributions)} = **{format_money(profit_loss)}**"
+    )
 
 # ============================================================
 # TOP METRICS
@@ -834,12 +806,11 @@ m5.metric("Total Contributions", format_money(total_contributions))
 
 m6, m7, m8, m9 = st.columns(4)
 m6.metric("Invested Cost Basis", format_money(invested_cost_basis))
-m7.metric("Holdings Gain / Loss", format_money(position_gain_loss))
+m7.metric("Holdings Gain / Loss", format_money(holdings_gain_loss))
 m8.metric("Goal Monthly", format_money(GOAL_MONTHLY))
 m9.metric("Goal Progress", f"{goal_progress * 100:.1f}%")
 
 st.progress(goal_progress)
-
 
 # ============================================================
 # INCOME METRICS
@@ -858,7 +829,6 @@ a1.metric("Conservative", format_money(conservative_annual_income))
 a2.metric("Realistic", format_money(realistic_annual_income))
 a3.metric("Actual", format_money(actual_annual_income))
 
-
 # ============================================================
 # HOLDINGS DETAIL
 # ============================================================
@@ -866,10 +836,11 @@ st.divider()
 st.subheader("Holdings Detail")
 
 if valuation_df.empty:
-    st.info("No holdings yet.")
+    st.info("No holdings loaded.")
 else:
     detail_df = valuation_df.copy()
     total_for_pct = detail_df["market_value"].sum()
+
     detail_df["% of Holdings"] = detail_df["market_value"].apply(
         lambda x: (x / total_for_pct * 100.0) if total_for_pct > 0 else 0.0
     )
@@ -877,8 +848,8 @@ else:
         lambda w: holdings_value * (safe_float(w) / 100.0)
     )
     detail_df["Dollar Gap"] = detail_df["Target $"] - detail_df["market_value"]
-    detail_df["Monthly Income"] = detail_df["market_value"] * detail_df["annual_yield"] / 12.0
-    detail_df["Annual Income"] = detail_df["market_value"] * detail_df["annual_yield"]
+    detail_df["Monthly Income"] = detail_df.apply(monthly_income_from_row, axis=1)
+    detail_df["Annual Income"] = detail_df.apply(annual_income_from_row, axis=1)
 
     display_cols = [
         "ticker",
@@ -906,23 +877,19 @@ else:
         hide_index=True,
     )
 
-
 # ============================================================
 # MONTHLY PAYOUT SCHEDULE
 # ============================================================
 st.divider()
 st.subheader("Estimated Monthly Payout Schedule")
 
-schedule_df = build_monthly_schedule(valuation_df)
-
-if not schedule_df.empty:
-    st.dataframe(schedule_df, use_container_width=True, hide_index=True)
+if schedule_df.empty:
+    st.info("No schedule available.")
 else:
-    st.info("No schedule available yet.")
-
+    st.dataframe(schedule_df, use_container_width=True, hide_index=True)
 
 # ============================================================
-# RAW LEDGER VIEW
+# LEDGER SUMMARY
 # ============================================================
 st.divider()
 st.subheader("Ledger Summary")
@@ -930,8 +897,8 @@ st.subheader("Ledger Summary")
 if tx_df.empty:
     st.write("No ledger events yet.")
 else:
-    summary = tx_df.groupby("type", dropna=False)["amount"].sum().reset_index()
-    st.dataframe(summary, use_container_width=True, hide_index=True)
+    summary_df = tx_df.groupby("type", dropna=False)["amount"].sum().reset_index()
+    st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
     st.dataframe(
         tx_df.sort_values(by=["date"]).reset_index(drop=True),
@@ -939,12 +906,11 @@ else:
         hide_index=True,
     )
 
-
 # ============================================================
-# FOOTER NOTES
+# FOOTER
 # ============================================================
 st.divider()
 st.caption(
     f"{CASH_TICKER} is excluded from holdings value and excluded from income calculations. "
-    "All totals are derived fresh on each run. The ledger controls cash and contribution math."
+    "All totals are derived fresh on each run. The ledger controls future cash and contribution math."
 )

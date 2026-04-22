@@ -1,4 +1,5 @@
-import math
+import json
+import os
 from typing import Dict, List
 
 import pandas as pd
@@ -16,6 +17,8 @@ GOAL_MONTHLY = 8000.0
 
 REALISTIC_INCOME_FACTOR = 0.843
 CONSERVATIVE_INCOME_FACTOR = 0.632
+
+STATE_FILE = "retirement_dashboard_state.json"
 
 DEFAULT_COLUMNS = [
     "ticker",
@@ -113,29 +116,91 @@ def normalize_portfolio_df(df: pd.DataFrame) -> pd.DataFrame:
     return out[DEFAULT_COLUMNS]
 
 
+def get_default_portfolio_df() -> pd.DataFrame:
+    return normalize_portfolio_df(pd.DataFrame(DEFAULT_ROWS, columns=DEFAULT_COLUMNS))
+
+
+def get_default_total_contributions(df: pd.DataFrame, cash_fdrxx: float) -> float:
+    holdings_cost = float((df["qty"].astype(float) * df["avg_cost"].astype(float)).sum())
+    return float(holdings_cost + cash_fdrxx)
+
+
+def round_money(value: float) -> float:
+    return round(float(value), 2)
+
+
+def round_shares(value: float) -> float:
+    return round(float(value), 6)
+
+
+def load_state() -> dict:
+    if not os.path.exists(STATE_FILE):
+        return {}
+
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+
+        portfolio_records = raw.get("portfolio_df", [])
+        if portfolio_records:
+            portfolio_df = normalize_portfolio_df(pd.DataFrame(portfolio_records))
+        else:
+            portfolio_df = get_default_portfolio_df()
+
+        cash_fdrxx = to_float(raw.get("cash_fdrxx", DEFAULT_CASH_FDRXX), DEFAULT_CASH_FDRXX)
+        total_contributions = to_float(
+            raw.get("total_contributions", get_default_total_contributions(portfolio_df, cash_fdrxx)),
+            get_default_total_contributions(portfolio_df, cash_fdrxx),
+        )
+        use_live_prices = bool(raw.get("use_live_prices", True))
+
+        return {
+            "portfolio_df": portfolio_df,
+            "cash_fdrxx": cash_fdrxx,
+            "total_contributions": total_contributions,
+            "use_live_prices": use_live_prices,
+        }
+    except Exception:
+        return {}
+
+
+def save_state() -> None:
+    try:
+        df = normalize_portfolio_df(st.session_state.portfolio_df.copy())
+        payload = {
+            "portfolio_df": df.to_dict(orient="records"),
+            "cash_fdrxx": round_money(st.session_state.cash_fdrxx),
+            "total_contributions": round_money(st.session_state.total_contributions),
+            "use_live_prices": bool(st.session_state.use_live_prices),
+        }
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+    except Exception:
+        pass
+
+
 def init_state() -> None:
-    if "portfolio_df" not in st.session_state:
-        st.session_state.portfolio_df = normalize_portfolio_df(
-            pd.DataFrame(DEFAULT_ROWS, columns=DEFAULT_COLUMNS)
-        )
+    if st.session_state.get("app_initialized", False):
+        return
 
-    if "editor_df" not in st.session_state:
-        st.session_state.editor_df = st.session_state.portfolio_df.copy()
+    loaded = load_state()
 
-    if "cash_fdrxx" not in st.session_state:
-        st.session_state.cash_fdrxx = float(DEFAULT_CASH_FDRXX)
+    portfolio_df = loaded.get("portfolio_df", get_default_portfolio_df())
+    cash_fdrxx = to_float(loaded.get("cash_fdrxx", DEFAULT_CASH_FDRXX), DEFAULT_CASH_FDRXX)
+    total_contributions = to_float(
+        loaded.get("total_contributions", get_default_total_contributions(portfolio_df, cash_fdrxx)),
+        get_default_total_contributions(portfolio_df, cash_fdrxx),
+    )
+    use_live_prices = bool(loaded.get("use_live_prices", True))
 
-    if "total_contributions" not in st.session_state:
-        starting_holdings_cost = float(
-            (
-                st.session_state.portfolio_df["qty"].astype(float)
-                * st.session_state.portfolio_df["avg_cost"].astype(float)
-            ).sum()
-        )
-        st.session_state.total_contributions = float(starting_holdings_cost + st.session_state.cash_fdrxx)
+    st.session_state.portfolio_df = normalize_portfolio_df(portfolio_df)
+    st.session_state.editor_df = normalize_portfolio_df(portfolio_df.copy())
+    st.session_state.cash_fdrxx = round_money(cash_fdrxx)
+    st.session_state.total_contributions = round_money(total_contributions)
+    st.session_state.use_live_prices = use_live_prices
+    st.session_state.app_initialized = True
 
-    if "use_live_prices" not in st.session_state:
-        st.session_state.use_live_prices = True
+    save_state()
 
 
 def sync_editor_from_portfolio() -> None:
@@ -166,13 +231,15 @@ def get_live_prices(tickers: List[str]) -> Dict[str, float]:
         if data is None or len(data) == 0:
             return prices
 
-        if len(set(cleaned_tickers)) == 1:
+        unique_tickers = sorted(set(cleaned_tickers))
+
+        if len(unique_tickers) == 1:
             close_series = data["Close"] if "Close" in data else None
             if close_series is not None and len(close_series.dropna()) > 0:
-                prices[cleaned_tickers[0]] = float(close_series.dropna().iloc[-1])
+                prices[unique_tickers[0]] = float(close_series.dropna().iloc[-1])
             return prices
 
-        for ticker in sorted(set(cleaned_tickers)):
+        for ticker in unique_tickers:
             try:
                 close_series = data[ticker]["Close"]
                 if len(close_series.dropna()) > 0:
@@ -211,7 +278,7 @@ def calculate_portfolio(df: pd.DataFrame, cash_fdrxx: float, use_live_prices: bo
 
     holdings_cost_basis = float(working["cost_basis"].sum())
     holdings_market_value = float(working["market_value"].sum())
-    cash_fdrxx = float(cash_fdrxx)
+    cash_fdrxx = round_money(cash_fdrxx)
 
     invested_cost_basis = holdings_cost_basis
     total_portfolio_value = holdings_market_value + cash_fdrxx
@@ -266,25 +333,28 @@ def calculate_portfolio(df: pd.DataFrame, cash_fdrxx: float, use_live_prices: bo
 
 
 def add_new_money(amount: float) -> None:
-    amount = float(amount)
+    amount = round_money(amount)
     if amount <= 0:
         return
 
-    st.session_state.cash_fdrxx = float(st.session_state.cash_fdrxx) + amount
-    st.session_state.total_contributions = float(st.session_state.total_contributions) + amount
+    st.session_state.cash_fdrxx = round_money(st.session_state.cash_fdrxx + amount)
+    st.session_state.total_contributions = round_money(st.session_state.total_contributions + amount)
+    save_state()
 
 
 def deploy_cash_to_position(ticker: str, dollars: float, calc_df: pd.DataFrame) -> None:
     ticker = str(ticker).upper().strip()
-    dollars = float(dollars)
+    dollars = round_money(dollars)
 
     if ticker == "" or dollars <= 0:
         return
 
-    available_cash = float(st.session_state.cash_fdrxx)
+    available_cash = round_money(st.session_state.cash_fdrxx)
     if dollars > available_cash:
         st.error("Not enough FDRXX cash available for that deployment.")
         return
+
+    before_total_value = round_money(float(calc_df["market_value"].sum()) + available_cash)
 
     df = normalize_portfolio_df(st.session_state.portfolio_df.copy())
     calc_df = calc_df.copy()
@@ -302,11 +372,13 @@ def deploy_cash_to_position(ticker: str, dollars: float, calc_df: pd.DataFrame) 
     if price_used <= 0:
         price_used = manual_price_lookup.get(ticker, 0.0)
 
+    price_used = round(to_float(price_used), 6)
+
     if price_used <= 0:
         st.error(f"Could not determine a valid price for {ticker}.")
         return
 
-    shares_added = dollars / price_used
+    shares_added = round_shares(dollars / price_used)
     match_idx = df.index[df["ticker"] == ticker].tolist()
 
     if match_idx:
@@ -315,22 +387,22 @@ def deploy_cash_to_position(ticker: str, dollars: float, calc_df: pd.DataFrame) 
         old_avg_cost = to_float(df.at[idx, "avg_cost"])
         old_cost_basis = old_qty * old_avg_cost
 
-        new_qty = old_qty + shares_added
+        new_qty = round_shares(old_qty + shares_added)
         new_cost_basis = old_cost_basis + dollars
-        new_avg_cost = new_cost_basis / new_qty if new_qty > 0 else 0.0
+        new_avg_cost = round(new_cost_basis / new_qty, 6) if new_qty > 0 else 0.0
 
         df.at[idx, "qty"] = new_qty
         df.at[idx, "avg_cost"] = new_avg_cost
 
         existing_manual = to_float(df.at[idx, "manual_price"])
         if existing_manual <= 0:
-            df.at[idx, "manual_price"] = price_used
+            df.at[idx, "manual_price"] = round(price_used, 4)
     else:
         new_row = {
             "ticker": ticker,
             "qty": shares_added,
-            "avg_cost": price_used,
-            "manual_price": price_used,
+            "avg_cost": round(price_used, 6),
+            "manual_price": round(price_used, 4),
             "target_weight": 0.0,
             "annual_yield": 0.0,
             "payout_frequency": "monthly",
@@ -341,7 +413,22 @@ def deploy_cash_to_position(ticker: str, dollars: float, calc_df: pd.DataFrame) 
 
     st.session_state.portfolio_df = normalize_portfolio_df(df)
     sync_editor_from_portfolio()
-    st.session_state.cash_fdrxx = available_cash - dollars
+    st.session_state.cash_fdrxx = round_money(available_cash - dollars)
+
+    post_calc = calculate_portfolio(
+        st.session_state.portfolio_df,
+        cash_fdrxx=st.session_state.cash_fdrxx,
+        use_live_prices=bool(st.session_state.use_live_prices),
+    )
+    after_total_value = round_money(post_calc["total_portfolio_value"])
+
+    if abs(after_total_value - before_total_value) > 0.05:
+        st.warning(
+            f"Transfer check: before deploy total was {format_dollars(before_total_value)} "
+            f"and after deploy total is {format_dollars(after_total_value)}."
+        )
+
+    save_state()
 
 
 def build_smarter_income_suggestions(df: pd.DataFrame, available_cash: float) -> pd.DataFrame:
@@ -425,7 +512,9 @@ def render_top_controls():
             value=bool(st.session_state.use_live_prices),
             help="If Yahoo Finance is unavailable, the app falls back to Manual Price.",
         )
-        st.session_state.use_live_prices = bool(use_live)
+        if bool(use_live) != bool(st.session_state.use_live_prices):
+            st.session_state.use_live_prices = bool(use_live)
+            save_state()
 
     with middle:
         cash_input = st.number_input(
@@ -435,7 +524,10 @@ def render_top_controls():
             step=100.0,
             format="%.2f",
         )
-        st.session_state.cash_fdrxx = float(cash_input)
+        cash_input = round_money(cash_input)
+        if cash_input != round_money(st.session_state.cash_fdrxx):
+            st.session_state.cash_fdrxx = cash_input
+            save_state()
 
     with right:
         total_contrib_input = st.number_input(
@@ -446,7 +538,10 @@ def render_top_controls():
             format="%.2f",
             help="This should only change when new outside money is added, or if you manually correct the starting total.",
         )
-        st.session_state.total_contributions = float(total_contrib_input)
+        total_contrib_input = round_money(total_contrib_input)
+        if total_contrib_input != round_money(st.session_state.total_contributions):
+            st.session_state.total_contributions = total_contrib_input
+            save_state()
 
     st.markdown("---")
 
@@ -554,8 +649,13 @@ def render_portfolio_editor():
         cleaned = normalize_portfolio_df(edited_df)
         st.session_state.portfolio_df = cleaned
         st.session_state.editor_df = cleaned.copy()
+        save_state()
         st.success("Holdings updated.")
         st.rerun()
+    else:
+        # keep editor aligned with portfolio after reruns so saved values do not appear to jump back
+        if not st.session_state.editor_df.equals(st.session_state.portfolio_df):
+            pass
 
 
 def render_deploy_cash(calc: dict):
@@ -721,6 +821,12 @@ def render_breakdowns(calc: dict):
 
 def main():
     init_state()
+
+    calc = calculate_portfolio(
+        st.session_state.portfolio_df,
+        cash_fdrxx=float(st.session_state.cash_fdrxx),
+        use_live_prices=bool(st.session_state.use_live_prices),
+    )
 
     render_top_controls()
     render_portfolio_editor()

@@ -1,4 +1,3 @@
-
 import json
 import os
 from datetime import datetime
@@ -134,15 +133,9 @@ def get_default_total_contributions(df: pd.DataFrame, cash_fdrxx: float) -> floa
     return float(holdings_cost + cash_fdrxx)
 
 
-def is_valid_price(live_price: float, fallback_price: float) -> bool:
+def is_valid_live_price(live_price: float) -> bool:
     try:
-        if live_price is None or pd.isna(live_price) or float(live_price) <= 0:
-            return False
-        if fallback_price is not None and float(fallback_price) > 0:
-            pct_diff = abs(float(live_price) - float(fallback_price)) / float(fallback_price)
-            if pct_diff > 0.25:
-                return False
-        return True
+        return live_price is not None and not pd.isna(live_price) and float(live_price) > 0
     except Exception:
         return False
 
@@ -317,7 +310,7 @@ def calculate_portfolio(df: pd.DataFrame, cash_fdrxx: float, use_live_prices: bo
         live = row["live_price"]
         manual = row["manual_price"]
 
-        if is_valid_price(live, manual):
+        if use_live_prices and is_valid_live_price(live):
             price_used.append(float(live))
             price_sources.append("LIVE")
         else:
@@ -342,9 +335,10 @@ def calculate_portfolio(df: pd.DataFrame, cash_fdrxx: float, use_live_prices: bo
     holdings_market_value = float(working["market_value"].sum())
     cash_fdrxx = round_money(cash_fdrxx)
 
-    total_portfolio_value = holdings_market_value + cash_fdrxx
+    # THIS is the true total account value: holdings + cash
+    total_account_value = holdings_market_value + cash_fdrxx
     total_contributions = float(st.session_state.total_contributions)
-    net_vs_contributions = total_portfolio_value - total_contributions
+    total_profit_loss = total_account_value - total_contributions
     gain_loss_holdings_only = holdings_market_value - holdings_cost_basis
 
     total_annual_income_actual = float(working["annual_income_est"].sum())
@@ -379,10 +373,10 @@ def calculate_portfolio(df: pd.DataFrame, cash_fdrxx: float, use_live_prices: bo
         "df": working,
         "holdings_cost_basis": holdings_cost_basis,
         "holdings_market_value": holdings_market_value,
-        "total_portfolio_value": total_portfolio_value,
+        "total_account_value": total_account_value,
         "cash_fdrxx": cash_fdrxx,
         "total_contributions": total_contributions,
-        "net_vs_contributions": net_vs_contributions,
+        "total_profit_loss": total_profit_loss,
         "gain_loss_holdings_only": gain_loss_holdings_only,
         "total_monthly_income_actual": total_monthly_income_actual,
         "total_annual_income_actual": total_annual_income_actual,
@@ -478,7 +472,7 @@ def deploy_cash_to_position(ticker: str, dollars: float, calc_df: pd.DataFrame) 
         cash_fdrxx=st.session_state.cash_fdrxx,
         use_live_prices=bool(st.session_state.use_live_prices),
     )
-    after_total_value = round_money(post_calc["total_portfolio_value"])
+    after_total_value = round_money(post_calc["total_account_value"])
 
     if abs(after_total_value - before_total_value) > 0.05:
         st.warning(
@@ -577,7 +571,7 @@ def render_top_controls():
         auto_sync = st.checkbox(
             "Auto-save good live prices",
             value=bool(st.session_state.auto_sync_prices),
-            help="When a live price looks valid, save it into Manual Price as your fallback.",
+            help="When a live price comes through, save it into Manual Price as your fallback.",
         )
         if bool(auto_sync) != bool(st.session_state.auto_sync_prices):
             st.session_state.auto_sync_prices = bool(auto_sync)
@@ -660,18 +654,21 @@ def render_top_controls():
 def render_metrics(calc: dict):
     st.markdown("## 📊 Portfolio Overview")
 
-    top1, top2, top3, top4 = st.columns(4)
+    top1, top2, top3, top4, top5 = st.columns(5)
 
     with top1:
-        st.metric("Portfolio Value", format_dollars(calc["total_portfolio_value"]))
+        st.metric("Total Account Value", format_dollars(calc["total_account_value"]))
 
     with top2:
-        st.metric("Net vs Contributions", format_dollars(calc["net_vs_contributions"]))
+        st.metric("Profit / Loss", format_dollars(calc["total_profit_loss"]))
 
     with top3:
-        st.metric("Available Cash (FDRXX)", format_dollars(calc["cash_fdrxx"]))
+        st.metric("Holdings Value", format_dollars(calc["holdings_market_value"]))
 
     with top4:
+        st.metric("Available Cash (FDRXX)", format_dollars(calc["cash_fdrxx"]))
+
+    with top5:
         st.metric("Total Contributions", format_dollars(calc["total_contributions"]))
 
     st.markdown("---")
@@ -755,11 +752,7 @@ def render_deploy_cash(calc: dict):
     c1, c2, c3 = st.columns([1.3, 1.0, 0.9])
 
     with c1:
-        deploy_ticker = st.selectbox(
-            "Ticker",
-            options=ticker_options,
-            key="deploy_ticker",
-        )
+        deploy_ticker = st.selectbox("Ticker", options=ticker_options, key="deploy_ticker")
 
     with c2:
         deploy_amount = st.number_input(

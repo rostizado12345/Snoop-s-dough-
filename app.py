@@ -14,10 +14,11 @@ except Exception:
 
 # ============================================================
 # RETIREMENT PAYCHECK DASHBOARD
-# Refresh-safe persistence fix:
-# - Deploy Cash now updates holdings, cash, editor table, and JSON state together.
-# - Save is atomic: writes to a temporary file first, then replaces the real file.
-# - The editor key is versioned so stale editor data cannot overwrite a deployment after rerun.
+# Added safety tools:
+# - Upload Snapshot Backup
+# - Restore Uploaded Snapshot
+# - Reverse This Session
+# - Download Session-Start Backup
 # ============================================================
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵", layout="wide")
@@ -136,11 +137,6 @@ def get_default_portfolio_df() -> pd.DataFrame:
     return normalize_portfolio_df(pd.DataFrame(DEFAULT_ROWS, columns=DEFAULT_COLUMNS))
 
 
-def holdings_cost_basis(df: pd.DataFrame) -> float:
-    clean = normalize_portfolio_df(df)
-    return float((clean["qty"] * clean["avg_cost"]).sum())
-
-
 def load_state() -> dict:
     if not os.path.exists(STATE_FILE):
         return {}
@@ -149,26 +145,29 @@ def load_state() -> dict:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             raw = json.load(f)
 
-        # Supports both older and newer key names.
-        records = raw.get("portfolio_df", raw.get("portfolio", []))
-        if records:
-            portfolio_df = normalize_portfolio_df(pd.DataFrame(records))
-        else:
-            portfolio_df = get_default_portfolio_df()
-
-        return {
-            "portfolio_df": portfolio_df,
-            "cash_fdrxx": round_money(to_float(raw.get("cash_fdrxx", raw.get("cash", DEFAULT_CASH_FDRXX)), DEFAULT_CASH_FDRXX)),
-            "total_contributions": round_money(to_float(raw.get("total_contributions", raw.get("contrib", DEFAULT_TOTAL_CONTRIBUTIONS)), DEFAULT_TOTAL_CONTRIBUTIONS)),
-            "use_live_prices": bool(raw.get("use_live_prices", True)),
-            "auto_sync_prices": bool(raw.get("auto_sync_prices", True)),
-            "last_price_sync": str(raw.get("last_price_sync", "")),
-            "last_saved": str(raw.get("last_saved", "")),
-            "last_deploy_message": str(raw.get("last_deploy_message", "")),
-        }
+        return normalize_state_payload(raw)
     except Exception as exc:
         st.warning(f"Could not read saved state file. Loading defaults. Error: {exc}")
         return {}
+
+
+def normalize_state_payload(raw: dict) -> dict:
+    records = raw.get("portfolio_df", raw.get("portfolio", []))
+    if records:
+        portfolio_df = normalize_portfolio_df(pd.DataFrame(records))
+    else:
+        portfolio_df = get_default_portfolio_df()
+
+    return {
+        "portfolio_df": portfolio_df,
+        "cash_fdrxx": round_money(to_float(raw.get("cash_fdrxx", raw.get("cash", DEFAULT_CASH_FDRXX)), DEFAULT_CASH_FDRXX)),
+        "total_contributions": round_money(to_float(raw.get("total_contributions", raw.get("contrib", DEFAULT_TOTAL_CONTRIBUTIONS)), DEFAULT_TOTAL_CONTRIBUTIONS)),
+        "use_live_prices": bool(raw.get("use_live_prices", True)),
+        "auto_sync_prices": bool(raw.get("auto_sync_prices", True)),
+        "last_price_sync": str(raw.get("last_price_sync", "")),
+        "last_saved": str(raw.get("last_saved", "")),
+        "last_deploy_message": str(raw.get("last_deploy_message", "")),
+    }
 
 
 def make_state_payload() -> dict:
@@ -210,6 +209,19 @@ def save_state() -> bool:
         return False
 
 
+def apply_state_dict(state: dict, message: str = "") -> None:
+    st.session_state.portfolio_df = normalize_portfolio_df(state["portfolio_df"])
+    st.session_state.editor_df = normalize_portfolio_df(state["portfolio_df"].copy())
+    st.session_state.cash_fdrxx = round_money(state["cash_fdrxx"])
+    st.session_state.total_contributions = round_money(state["total_contributions"])
+    st.session_state.use_live_prices = bool(state.get("use_live_prices", True))
+    st.session_state.auto_sync_prices = bool(state.get("auto_sync_prices", True))
+    st.session_state.last_price_sync = state.get("last_price_sync", "")
+    st.session_state.last_saved = state.get("last_saved", "")
+    st.session_state.last_deploy_message = message or state.get("last_deploy_message", "")
+    sync_editor_from_portfolio()
+
+
 def bump_editor_version() -> None:
     st.session_state.editor_version = int(st.session_state.get("editor_version", 0)) + 1
 
@@ -237,8 +249,19 @@ def init_state() -> None:
     st.session_state.last_deploy_message = loaded.get("last_deploy_message", "")
     st.session_state.last_save_error = ""
     st.session_state.editor_version = 0
-    st.session_state.app_initialized = True
 
+    st.session_state.session_start_payload = {
+        "portfolio_df": st.session_state.portfolio_df.to_dict(orient="records"),
+        "cash_fdrxx": st.session_state.cash_fdrxx,
+        "total_contributions": st.session_state.total_contributions,
+        "use_live_prices": st.session_state.use_live_prices,
+        "auto_sync_prices": st.session_state.auto_sync_prices,
+        "last_price_sync": st.session_state.last_price_sync,
+        "last_saved": st.session_state.last_saved,
+        "last_deploy_message": st.session_state.last_deploy_message,
+    }
+
+    st.session_state.app_initialized = True
     save_state()
 
 
@@ -806,29 +829,27 @@ def render_income_helper(calc: dict) -> None:
 def render_system_tools() -> None:
     st.subheader("System Tools")
 
+    st.warning("Safety tip: use Download Snapshot Backup before big changes.")
+
     c1, c2, c3 = st.columns(3)
 
     with c1:
-        if st.button("Reset to Fidelity Baseline", use_container_width=True):
-            st.session_state.portfolio_df = get_default_portfolio_df()
-            st.session_state.editor_df = get_default_portfolio_df()
-            st.session_state.cash_fdrxx = DEFAULT_CASH_FDRXX
-            st.session_state.total_contributions = DEFAULT_TOTAL_CONTRIBUTIONS
-            st.session_state.last_deploy_message = "Reset to Fidelity baseline complete."
-            sync_editor_from_portfolio()
-            save_state()
-            st.rerun()
+        if st.button("Reverse This Session", use_container_width=True):
+            try:
+                raw = st.session_state.get("session_start_payload", {})
+                state = normalize_state_payload(raw)
+                apply_state_dict(state, "Reversed this session back to the state from when the app opened.")
+                save_state()
+                st.success("Session reversed.")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Could not reverse session: {exc}")
 
     with c2:
         if st.button("Reload Saved File", use_container_width=True):
             loaded = load_state()
             if loaded:
-                st.session_state.portfolio_df = normalize_portfolio_df(loaded["portfolio_df"])
-                st.session_state.editor_df = normalize_portfolio_df(loaded["portfolio_df"].copy())
-                st.session_state.cash_fdrxx = round_money(loaded["cash_fdrxx"])
-                st.session_state.total_contributions = round_money(loaded["total_contributions"])
-                st.session_state.last_deploy_message = "Reloaded from saved JSON file."
-                sync_editor_from_portfolio()
+                apply_state_dict(loaded, "Reloaded from saved JSON file.")
                 st.rerun()
 
     with c3:
@@ -837,6 +858,8 @@ def render_system_tools() -> None:
                 st.success("Saved current dashboard state.")
             else:
                 st.error(f"Save failed: {st.session_state.last_save_error}")
+
+    st.markdown("### Snapshot Backup / Restore")
 
     payload = make_state_payload()
     st.download_button(
@@ -847,6 +870,52 @@ def render_system_tools() -> None:
         use_container_width=True,
     )
 
+    session_payload = st.session_state.get("session_start_payload", {})
+    st.download_button(
+        "Download Session-Start Backup",
+        data=json.dumps(session_payload, indent=2),
+        file_name=f"retirement_dashboard_session_start_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+
+    uploaded_file = st.file_uploader("Upload Snapshot Backup", type=["json"], key="snapshot_upload")
+
+    if uploaded_file is not None:
+        try:
+            uploaded_raw = json.loads(uploaded_file.getvalue().decode("utf-8"))
+            uploaded_state = normalize_state_payload(uploaded_raw)
+
+            st.info(
+                "Uploaded snapshot ready: "
+                f"Cash {format_dollars(uploaded_state['cash_fdrxx'])}, "
+                f"Contributions {format_dollars(uploaded_state['total_contributions'])}."
+            )
+
+            if st.button("Restore Uploaded Snapshot", use_container_width=True):
+                apply_state_dict(uploaded_state, "Restored from uploaded snapshot backup.")
+                save_state()
+                st.success("Uploaded snapshot restored.")
+                st.rerun()
+
+        except Exception as exc:
+            st.error(f"That file could not be restored. Make sure it is a dashboard snapshot JSON file. Error: {exc}")
+
+    st.markdown("### Dangerous Reset")
+
+    with st.expander("Reset to Fidelity Baseline"):
+        st.error("Only use this if you want to wipe current dashboard numbers back to the built-in baseline.")
+        confirm_reset = st.checkbox("I understand this will reset to the built-in baseline.")
+        if st.button("Reset to Fidelity Baseline", use_container_width=True, disabled=not confirm_reset):
+            st.session_state.portfolio_df = get_default_portfolio_df()
+            st.session_state.editor_df = get_default_portfolio_df()
+            st.session_state.cash_fdrxx = DEFAULT_CASH_FDRXX
+            st.session_state.total_contributions = DEFAULT_TOTAL_CONTRIBUTIONS
+            st.session_state.last_deploy_message = "Reset to Fidelity baseline complete."
+            sync_editor_from_portfolio()
+            save_state()
+            st.rerun()
+
     st.caption(f"Last saved: {st.session_state.get('last_saved', 'not yet') or 'not yet'}")
     if st.session_state.get("last_save_error"):
         st.error(f"Last save error: {st.session_state.last_save_error}")
@@ -856,7 +925,7 @@ def main() -> None:
     init_state()
 
     st.title("💵 Retirement Paycheck Dashboard")
-    st.caption("Refresh-safe version: deployments save permanently and cannot be overwritten by stale editor state.")
+    st.caption("Refresh-safe version with upload restore and session reverse protection.")
 
     settings_cols = st.columns(3)
     with settings_cols[0]:

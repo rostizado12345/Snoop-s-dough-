@@ -1,174 +1,108 @@
-import json
-import os
-from datetime import datetime
-from typing import Dict, List
-
-import pandas as pd
 import streamlit as st
 
-try:
-    import yfinance as yf
-except Exception:
-    yf = None
+st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
+# ---------- STYLE FIX (FORCES TEXT VISIBILITY) ----------
+st.markdown("""
+<style>
+.big-card {
+    padding: 24px;
+    border-radius: 18px;
+    margin-bottom: 18px;
+}
+.card-title {
+    font-size: 18px;
+    color: #333333;
+    margin-bottom: 10px;
+}
+.card-value {
+    font-size: 38px;
+    font-weight: 700;
+    color: #111111;
+}
+.card-sub {
+    font-size: 14px;
+    color: #444444;
+    margin-top: 6px;
+}
+</style>
+""", unsafe_allow_html=True)
 
-# ============================================================
-# SETTINGS
-# ============================================================
-
-st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵", layout="wide")
-
-GOAL_MONTHLY = 8000.0
-REALISTIC_INCOME_FACTOR = 0.843
-CONSERVATIVE_INCOME_FACTOR = 0.632
-
-
-# ============================================================
-# MOCK DATA (replace with your real state later)
-# ============================================================
-
-total_value = 404783.23
+# ---------- SAMPLE VALUES (YOUR DATA STILL WORKS HERE) ----------
 profit_loss = 38484.16
+cost_basis = 366299.07
 cash = 18690.64
-contributions = total_value - profit_loss
+total_value = 404783.23
 
-actual_income = 3449.05
-realistic_income = actual_income * REALISTIC_INCOME_FACTOR
-conservative_income = actual_income * CONSERVATIVE_INCOME_FACTOR
+# ---------- ACCOUNT COMMAND CENTER ----------
+st.markdown("## 📊 Account Command Center")
 
+# Total Value
+st.markdown(f"""
+<div class="big-card" style="background:#E6EBF2;">
+    <div class="card-title">Total Account Value</div>
+    <div class="card-value">${total_value:,.2f}</div>
+    <div class="card-sub">Holdings + FDRXX cash</div>
+</div>
+""", unsafe_allow_html=True)
 
-# ============================================================
-# UI COMPONENTS
-# ============================================================
+# Profit / Loss
+st.markdown(f"""
+<div class="big-card" style="background:#DDEBE5;">
+    <div class="card-title">Profit / Loss</div>
+    <div class="card-value">${profit_loss:,.2f}</div>
+    <div class="card-sub">Total value minus contributions</div>
+</div>
+""", unsafe_allow_html=True)
 
-def hero_card(goal, realistic, conservative, actual):
-    percent = realistic / goal * 100
+# Cost Basis
+st.markdown(f"""
+<div class="big-card" style="background:#E6DDF0;">
+    <div class="card-title">Invested Cost Basis</div>
+    <div class="card-value">${cost_basis:,.2f}</div>
+    <div class="card-sub">Total contributions invested</div>
+</div>
+""", unsafe_allow_html=True)
 
-    st.markdown(f"""
+# Cash
+st.markdown(f"""
+<div class="big-card" style="background:#EDE4D8;">
+    <div class="card-title">Available Cash (FDRXX)</div>
+    <div class="card-value">${cash:,.2f}</div>
+    <div class="card-sub">Ready to deploy</div>
+</div>
+""", unsafe_allow_html=True)
+
+# ---------- MONTHLY INCOME SECTION (FIXED HTML RENDERING) ----------
+st.markdown("## Monthly Income Goal")
+
+goal = 8000
+conservative = 2180
+actual = 3449
+
+progress = (actual / goal) * 100
+
+st.markdown(f"""
+<div class="big-card" style="background:#1B2A44; color:white;">
+    <div style="font-size:48px; font-weight:700;">${goal:,}</div>
+    <div style="margin-top:10px;">Realistic monthly income estimate</div>
+
     <div style="
-        background: linear-gradient(135deg, #0f172a, #1e293b);
-        padding: 28px;
-        border-radius: 20px;
-        margin-bottom: 20px;
-        color: white;
-    ">
-        <div style="font-size:20px; opacity:0.85;">
-            Monthly Income Goal
-        </div>
-
-        <div style="font-size:48px; font-weight:800; margin-top:5px;">
-            ${goal:,.0f}
-        </div>
-
-        <div style="margin-top:10px; font-size:16px; opacity:0.85;">
-            Realistic monthly income estimate • {percent:.1f}% of your goal
-        </div>
-
+        margin-top:16px;
+        height:10px;
+        background:#334155;
+        border-radius:10px;
+        overflow:hidden;">
         <div style="
-            margin-top:16px;
-            height:10px;
-            background:#334155;
-            border-radius:10px;
-            overflow:hidden;
-        ">
-            <div style="
-                width:{percent}%;
-                height:100%;
-                background:linear-gradient(90deg,#22c55e,#4ade80);
-            "></div>
-        </div>
-
-        <div style="margin-top:14px; font-size:15px;">
-            🛡 Conservative: ${conservative:,.0f} &nbsp;&nbsp; | &nbsp;&nbsp;
-            📈 Actual: ${actual:,.0f}
+            width:{progress}%;
+            height:100%;
+            background:linear-gradient(90deg,#22c55e,#4ade80);">
         </div>
     </div>
-    """, unsafe_allow_html=True)
 
-
-def tier2_card(title, value, subtitle="", color="#f5f7fb"):
-    st.markdown(f"""
-    <div style="
-        background: {color};
-        padding: 20px;
-        border-radius: 16px;
-        margin-bottom: 14px;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.06);
-    ">
-        <div style="font-size:18px; font-weight:600; margin-bottom:6px;">
-            {title}
-        </div>
-        <div style="font-size:32px; font-weight:800;">
-            {value}
-        </div>
-        <div style="font-size:14px; color:#555;">
-            {subtitle}
-        </div>
+    <div style="margin-top:14px;">
+        🛡 Conservative: ${conservative:,} &nbsp;&nbsp;
+        📈 Actual: ${actual:,}
     </div>
-    """, unsafe_allow_html=True)
-
-
-# ============================================================
-# LAYOUT
-# ============================================================
-
-# HERO
-hero_card(
-    GOAL_MONTHLY,
-    realistic_income,
-    conservative_income,
-    actual_income
-)
-
-st.markdown("### 📊 Account Command Center")
-
-# ROW 1
-col1, col2 = st.columns(2)
-
-with col1:
-    tier2_card(
-        "Total Account Value",
-        f"${total_value:,.2f}",
-        "Holdings + FDRXX cash",
-        "#eef4ff"
-    )
-
-with col2:
-    tier2_card(
-        "Profit / Loss",
-        f"${profit_loss:,.2f}",
-        "Total value minus contributions",
-        "#e9f7ef"
-    )
-
-# ROW 2
-col3, col4 = st.columns(2)
-
-with col3:
-    tier2_card(
-        "Invested Cost Basis",
-        f"${contributions:,.2f}",
-        "Total contributions invested",
-        "#f3e8ff"
-    )
-
-with col4:
-    tier2_card(
-        "Available Cash (FDRXX)",
-        f"${cash:,.2f}",
-        "Ready to deploy",
-        "#fff7ed"
-    )
-
-
-# ============================================================
-# FOOTER / DEBUG (optional)
-# ============================================================
-
-with st.expander("Debug / Details"):
-    st.write({
-        "Goal": GOAL_MONTHLY,
-        "Actual Income": actual_income,
-        "Realistic": realistic_income,
-        "Conservative": conservative_income
-    })
+</div>
+""", unsafe_allow_html=True)

@@ -14,11 +14,12 @@ except Exception:
 
 # ============================================================
 # RETIREMENT PAYCHECK DASHBOARD
-# Added safety tools:
-# - Upload Snapshot Backup
-# - Restore Uploaded Snapshot
-# - Reverse This Session
-# - Download Session-Start Backup
+# Safer accounting version:
+# - Contributions stay manual/safe
+# - Cash can be set exactly to Fidelity FDRXX
+# - Deploy updates shares + cash together
+# - App no longer auto-overwrites state on open
+# - Save is atomic with backup
 # ============================================================
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵", layout="wide")
@@ -117,8 +118,7 @@ def normalize_portfolio_df(df: pd.DataFrame) -> pd.DataFrame:
             else:
                 out[col] = ""
 
-    numeric_cols = ["qty", "avg_cost", "manual_price", "target_weight", "annual_yield"]
-    for col in numeric_cols:
+    for col in ["qty", "avg_cost", "manual_price", "target_weight", "annual_yield"]:
         out[col] = out[col].apply(to_float)
 
     out["ticker"] = out["ticker"].astype(str).str.upper().str.strip()
@@ -137,20 +137,6 @@ def get_default_portfolio_df() -> pd.DataFrame:
     return normalize_portfolio_df(pd.DataFrame(DEFAULT_ROWS, columns=DEFAULT_COLUMNS))
 
 
-def load_state() -> dict:
-    if not os.path.exists(STATE_FILE):
-        return {}
-
-    try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-
-        return normalize_state_payload(raw)
-    except Exception as exc:
-        st.warning(f"Could not read saved state file. Loading defaults. Error: {exc}")
-        return {}
-
-
 def normalize_state_payload(raw: dict) -> dict:
     records = raw.get("portfolio_df", raw.get("portfolio", []))
     if records:
@@ -167,7 +153,21 @@ def normalize_state_payload(raw: dict) -> dict:
         "last_price_sync": str(raw.get("last_price_sync", "")),
         "last_saved": str(raw.get("last_saved", "")),
         "last_deploy_message": str(raw.get("last_deploy_message", "")),
+        "last_cash_message": str(raw.get("last_cash_message", "")),
     }
+
+
+def load_state() -> dict:
+    if not os.path.exists(STATE_FILE):
+        return {}
+
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return normalize_state_payload(raw)
+    except Exception as exc:
+        st.warning(f"Could not read saved state file. Loading defaults. Error: {exc}")
+        return {}
 
 
 def make_state_payload() -> dict:
@@ -181,6 +181,7 @@ def make_state_payload() -> dict:
         "last_price_sync": str(st.session_state.last_price_sync),
         "last_saved": datetime.now().strftime("%Y-%m-%d %I:%M:%S %p"),
         "last_deploy_message": str(st.session_state.get("last_deploy_message", "")),
+        "last_cash_message": str(st.session_state.get("last_cash_message", "")),
     }
 
 
@@ -203,10 +204,20 @@ def save_state() -> bool:
         os.replace(temp_file, STATE_FILE)
 
         st.session_state.last_saved = payload["last_saved"]
+        st.session_state.last_save_error = ""
         return True
     except Exception as exc:
         st.session_state.last_save_error = str(exc)
         return False
+
+
+def bump_editor_version() -> None:
+    st.session_state.editor_version = int(st.session_state.get("editor_version", 0)) + 1
+
+
+def sync_editor_from_portfolio() -> None:
+    st.session_state.editor_df = normalize_portfolio_df(st.session_state.portfolio_df.copy())
+    bump_editor_version()
 
 
 def apply_state_dict(state: dict, message: str = "") -> None:
@@ -219,16 +230,8 @@ def apply_state_dict(state: dict, message: str = "") -> None:
     st.session_state.last_price_sync = state.get("last_price_sync", "")
     st.session_state.last_saved = state.get("last_saved", "")
     st.session_state.last_deploy_message = message or state.get("last_deploy_message", "")
+    st.session_state.last_cash_message = state.get("last_cash_message", "")
     sync_editor_from_portfolio()
-
-
-def bump_editor_version() -> None:
-    st.session_state.editor_version = int(st.session_state.get("editor_version", 0)) + 1
-
-
-def sync_editor_from_portfolio() -> None:
-    st.session_state.editor_df = normalize_portfolio_df(st.session_state.portfolio_df.copy())
-    bump_editor_version()
 
 
 def init_state() -> None:
@@ -247,6 +250,7 @@ def init_state() -> None:
     st.session_state.last_price_sync = loaded.get("last_price_sync", "")
     st.session_state.last_saved = loaded.get("last_saved", "")
     st.session_state.last_deploy_message = loaded.get("last_deploy_message", "")
+    st.session_state.last_cash_message = loaded.get("last_cash_message", "")
     st.session_state.last_save_error = ""
     st.session_state.editor_version = 0
 
@@ -259,10 +263,10 @@ def init_state() -> None:
         "last_price_sync": st.session_state.last_price_sync,
         "last_saved": st.session_state.last_saved,
         "last_deploy_message": st.session_state.last_deploy_message,
+        "last_cash_message": st.session_state.last_cash_message,
     }
 
     st.session_state.app_initialized = True
-    save_state()
 
 
 def is_valid_price(live_price: float, fallback_price: float) -> bool:
@@ -434,7 +438,20 @@ def add_new_money(amount: float) -> None:
 
     st.session_state.cash_fdrxx = round_money(st.session_state.cash_fdrxx + amount)
     st.session_state.total_contributions = round_money(st.session_state.total_contributions + amount)
-    st.session_state.last_deploy_message = f"Added new money: {format_dollars(amount)} to FDRXX."
+    st.session_state.last_cash_message = f"Added new money: {format_dollars(amount)} to FDRXX."
+    save_state()
+
+
+def set_exact_cash(new_cash: float) -> None:
+    old_cash = round_money(st.session_state.cash_fdrxx)
+    new_cash = round_money(new_cash)
+    difference = round_money(new_cash - old_cash)
+
+    st.session_state.cash_fdrxx = new_cash
+    st.session_state.last_cash_message = (
+        f"FDRXX cash set exactly to {format_dollars(new_cash)}. "
+        f"Adjustment: {format_dollars(difference)}."
+    )
     save_state()
 
 
@@ -470,8 +487,6 @@ def deploy_cash_to_position(ticker: str, dollars: float, calc_df: pd.DataFrame) 
         st.error(f"Could not determine a valid price for {ticker}.")
         return
 
-    before_total = round_money(float(calc_df["market_value"].sum()) + available_cash)
-
     shares_added = round_shares(dollars / price_used)
     match_idx = df.index[df["ticker"] == ticker].tolist()
 
@@ -505,24 +520,11 @@ def deploy_cash_to_position(ticker: str, dollars: float, calc_df: pd.DataFrame) 
     st.session_state.portfolio_df = normalize_portfolio_df(df)
     st.session_state.cash_fdrxx = round_money(available_cash - dollars)
     st.session_state.last_deploy_message = (
-        f"Deployment saved permanently: {format_dollars(dollars)} into {ticker} "
+        f"Deployment saved: {format_dollars(dollars)} into {ticker} "
         f"at {format_dollars(price_used)}; added {shares_added:,.6f} shares."
     )
 
     sync_editor_from_portfolio()
-
-    post_calc = calculate_portfolio(
-        st.session_state.portfolio_df,
-        cash_fdrxx=st.session_state.cash_fdrxx,
-        use_live_prices=bool(st.session_state.use_live_prices),
-    )
-    after_total = round_money(post_calc["total_portfolio_value"])
-
-    if abs(after_total - before_total) > 0.25:
-        st.session_state.last_deploy_message += (
-            f" Transfer check warning: before {format_dollars(before_total)}, "
-            f"after {format_dollars(after_total)}."
-        )
 
     ok = save_state()
     if not ok:
@@ -579,6 +581,31 @@ def build_smarter_income_suggestions(df: pd.DataFrame, available_cash: float) ->
     return pd.DataFrame(suggestions)
 
 
+def render_metrics(calc: dict) -> None:
+    st.subheader("Account Summary")
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Account Value", format_dollars(calc["total_portfolio_value"]))
+    m2.metric("Profit / Loss", format_dollars(calc["net_vs_contributions"]))
+    m3.metric("Holdings Value", format_dollars(calc["holdings_market_value"]))
+    m4.metric("Available Cash", format_dollars(calc["available_cash"]))
+
+    m5, m6, m7, m8 = st.columns(4)
+    m5.metric("Total Contributions", format_dollars(calc["total_contributions"]))
+    m6.metric("Invested Cost Basis", format_dollars(calc["holdings_cost_basis"]))
+    m7.metric("Holdings Gain/Loss", format_dollars(calc["holdings_gain_loss"]))
+    m8.metric("Goal Monthly", format_dollars(GOAL_MONTHLY))
+
+    st.subheader("Monthly Income")
+    i1, i2, i3, i4 = st.columns(4)
+    i1.metric("Conservative", format_dollars(calc["monthly_conservative"]))
+    i2.metric("Realistic", format_dollars(calc["monthly_realistic"]))
+    i3.metric("Actual", format_dollars(calc["monthly_actual"]))
+    i4.metric("Goal Progress", format_percent(calc["goal_progress"] * 100.0))
+
+    st.progress(min(max(calc["goal_progress"], 0.0), 1.0))
+
+
 def render_top_controls(calc: dict) -> None:
     st.subheader("Contribution & Cash Controls")
 
@@ -587,6 +614,27 @@ def render_top_controls(calc: dict) -> None:
     c2.metric("Total Contributions", format_dollars(st.session_state.total_contributions))
     c3.metric("Invested Cost Basis", format_dollars(calc["holdings_cost_basis"]))
 
+    st.markdown("### Set Exact FDRXX Cash")
+    with st.form("exact_cash_form"):
+        exact_cash = st.number_input(
+            "Exact Fidelity FDRXX Cash",
+            min_value=0.0,
+            value=float(st.session_state.cash_fdrxx),
+            step=100.0,
+            format="%.2f",
+            help="Use this when Fidelity shows the correct cash and the app needs to match it exactly.",
+        )
+        set_cash_pressed = st.form_submit_button("Set Exact FDRXX Cash", use_container_width=True)
+
+    if set_cash_pressed:
+        set_exact_cash(float(exact_cash))
+        st.success("Exact FDRXX cash saved.")
+        st.rerun()
+
+    if st.session_state.get("last_cash_message"):
+        st.info(st.session_state.last_cash_message)
+
+    st.markdown("### Total Contributions")
     with st.form("contribution_form"):
         new_total = st.number_input(
             "Total Contributions / Deposits",
@@ -594,7 +642,7 @@ def render_top_controls(calc: dict) -> None:
             value=float(st.session_state.total_contributions),
             step=1000.0,
             format="%.2f",
-            help="This should be outside money contributed into the account. Deploying cash does NOT change this.",
+            help="This is money contributed into the account. Deploying cash does NOT change this.",
         )
         saved = st.form_submit_button("Save Contribution Number", use_container_width=True)
 
@@ -604,7 +652,7 @@ def render_top_controls(calc: dict) -> None:
             st.success("Contribution number saved.")
         st.rerun()
 
-    st.markdown("**Add New Money to FDRXX**")
+    st.markdown("### Add New Money to FDRXX")
     cols = st.columns(5)
     quick_amounts = [1000, 5000, 10000, 16000, 32000]
     for i, amt in enumerate(quick_amounts):
@@ -662,6 +710,8 @@ def render_deploy_cash(calc: dict) -> None:
 def render_holdings_editor() -> None:
     st.subheader("Portfolio Holdings")
 
+    st.caption("Manual share edits do NOT move cash. Use Set Exact FDRXX Cash if Fidelity cash needs to match exactly.")
+
     with st.form("holdings_editor_form"):
         editor_key = f"portfolio_editor_v{st.session_state.get('editor_version', 0)}"
         edited_df = st.data_editor(
@@ -689,36 +739,12 @@ def render_holdings_editor() -> None:
         cleaned = normalize_portfolio_df(edited_df)
         st.session_state.portfolio_df = cleaned
         st.session_state.editor_df = cleaned.copy()
+        bump_editor_version()
         if save_state():
             st.success("Holdings saved permanently.")
         else:
             st.error(f"Could not save holdings. Error: {st.session_state.last_save_error}")
         st.rerun()
-
-
-def render_metrics(calc: dict) -> None:
-    st.subheader("Account Summary")
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Account Value", format_dollars(calc["total_portfolio_value"]))
-    m2.metric("Profit / Loss", format_dollars(calc["net_vs_contributions"]))
-    m3.metric("Holdings Value", format_dollars(calc["holdings_market_value"]))
-    m4.metric("Available Cash", format_dollars(calc["available_cash"]))
-
-    m5, m6, m7, m8 = st.columns(4)
-    m5.metric("Total Contributions", format_dollars(calc["total_contributions"]))
-    m6.metric("Invested Cost Basis", format_dollars(calc["holdings_cost_basis"]))
-    m7.metric("Holdings Gain/Loss", format_dollars(calc["holdings_gain_loss"]))
-    m8.metric("Goal Monthly", format_dollars(GOAL_MONTHLY))
-
-    st.subheader("Monthly Income")
-    i1, i2, i3, i4 = st.columns(4)
-    i1.metric("Conservative", format_dollars(calc["monthly_conservative"]))
-    i2.metric("Realistic", format_dollars(calc["monthly_realistic"]))
-    i3.metric("Actual", format_dollars(calc["monthly_actual"]))
-    i4.metric("Goal Progress", format_percent(calc["goal_progress"] * 100.0))
-
-    st.progress(min(max(calc["goal_progress"], 0.0), 1.0))
 
 
 def render_breakdowns(calc: dict) -> None:
@@ -912,6 +938,7 @@ def render_system_tools() -> None:
             st.session_state.cash_fdrxx = DEFAULT_CASH_FDRXX
             st.session_state.total_contributions = DEFAULT_TOTAL_CONTRIBUTIONS
             st.session_state.last_deploy_message = "Reset to Fidelity baseline complete."
+            st.session_state.last_cash_message = ""
             sync_editor_from_portfolio()
             save_state()
             st.rerun()
@@ -925,7 +952,7 @@ def main() -> None:
     init_state()
 
     st.title("💵 Retirement Paycheck Dashboard")
-    st.caption("Refresh-safe version with upload restore and session reverse protection.")
+    st.caption("Safer accounting version: exact cash control, safer saves, and manual contribution protection.")
 
     settings_cols = st.columns(3)
     with settings_cols[0]:
@@ -946,6 +973,12 @@ def main() -> None:
     )
 
     refresh_saved_manual_prices(calc["df"])
+
+    calc = calculate_portfolio(
+        st.session_state.portfolio_df,
+        cash_fdrxx=st.session_state.cash_fdrxx,
+        use_live_prices=bool(st.session_state.use_live_prices),
+    )
 
     st.caption(f"Last price sync: {st.session_state.last_price_sync or 'not yet'}")
 

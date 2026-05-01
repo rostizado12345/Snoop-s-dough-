@@ -14,7 +14,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵", layout="wide")
 
-APP_BASELINE_VERSION = "2026-04-30-production-fidelity-snapshot-v1"
+APP_BASELINE_VERSION = "2026-04-30-production-fidelity-snapshot-v2-color-ui"
 
 GOAL_MONTHLY = 8000.0
 REALISTIC_INCOME_FACTOR = 0.843
@@ -158,7 +158,7 @@ def load_state() -> dict:
 
         if loaded.get("app_baseline_version") != APP_BASELINE_VERSION:
             migrated = baseline_state_payload()
-            migrated["last_deploy_message"] = "Migrated regular app to real production Fidelity snapshot baseline."
+            migrated["last_deploy_message"] = "Migrated regular app to real production Fidelity snapshot baseline with restored color UI."
             return migrated
 
         return loaded
@@ -571,8 +571,9 @@ def inject_dashboard_css() -> None:
 
         .dashboard-title {
             font-size: 2.25rem;
-            font-weight: 850;
+            font-weight: 900;
             margin-bottom: 0.15rem;
+            color: #0f172a;
         }
 
         .dashboard-subtitle {
@@ -604,7 +605,7 @@ def inject_dashboard_css() -> None:
 
         .hero-number {
             font-size: 2.7rem;
-            font-weight: 850;
+            font-weight: 900;
             margin: 2px 0 2px 0;
         }
 
@@ -631,37 +632,57 @@ def inject_dashboard_css() -> None:
         .metric-card {
             border-radius: 18px;
             padding: 18px 18px 16px 18px;
-            background: #ffffff;
-            border: 1px solid #e2e8f0;
-            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.07);
             margin-bottom: 12px;
             min-height: 118px;
         }
 
+        .metric-blue {
+            background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+        }
+
+        .metric-purple {
+            background: linear-gradient(135deg, #faf5ff 0%, #ede9fe 100%);
+        }
+
+        .metric-green {
+            background: linear-gradient(135deg, #ecfdf5 0%, #dcfce7 100%);
+        }
+
+        .metric-amber {
+            background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+        }
+
+        .metric-gray {
+            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+        }
+
         .metric-label {
-            color: #475569 !important;
+            color: #334155 !important;
             font-size: 0.88rem;
-            font-weight: 700;
+            font-weight: 800;
             margin-bottom: 6px;
         }
 
         .metric-value {
             color: #0f172a !important;
             font-size: 1.55rem;
-            font-weight: 850;
+            font-weight: 900;
             line-height: 1.15;
         }
 
         .metric-note {
-            color: #64748b !important;
+            color: #475569 !important;
             font-size: 0.82rem;
             margin-top: 7px;
         }
 
         .section-title {
             font-size: 1.35rem;
-            font-weight: 850;
+            font-weight: 900;
             margin-bottom: 2px;
+            color: #0f172a;
         }
 
         .section-subtitle {
@@ -687,9 +708,22 @@ def inject_dashboard_css() -> None:
 
 
 def render_card(icon: str, label: str, value: str, note: str = "") -> None:
+    label_lower = label.lower()
+
+    if any(word in label_lower for word in ["cash", "fdrxx", "deploy"]):
+        tone = "metric-green"
+    elif any(word in label_lower for word in ["income", "goal", "conservative", "realistic"]):
+        tone = "metric-purple"
+    elif any(word in label_lower for word in ["gain", "profit", "loss"]):
+        tone = "metric-amber"
+    elif any(word in label_lower for word in ["value", "basis", "contribution", "holdings"]):
+        tone = "metric-blue"
+    else:
+        tone = "metric-gray"
+
     st.markdown(
         f"""
-        <div class="metric-card">
+        <div class="metric-card {tone}">
             <div style="font-size:1.25rem;margin-bottom:4px;">{icon}</div>
             <div class="metric-label">{label}</div>
             <div class="metric-value">{value}</div>
@@ -1105,7 +1139,7 @@ def main() -> None:
 
     st.markdown('<div class="dashboard-title">💵 Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="dashboard-subtitle">Regular production app • real Fidelity snapshot baseline • exact cash, holdings, and anti-revert save logic.</div>',
+        '<div class="dashboard-subtitle">Regular production app • real Fidelity snapshot baseline • exact cash, holdings, restored color UI, and anti-revert save logic.</div>',
         unsafe_allow_html=True,
     )
 

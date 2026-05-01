@@ -14,7 +14,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵", layout="wide")
 
-APP_BASELINE_VERSION = "2026-04-29-fidelity-reality-v1"
+APP_BASELINE_VERSION = "2026-04-30-production-fidelity-snapshot-v2-color-ui"
 
 GOAL_MONTHLY = 8000.0
 REALISTIC_INCOME_FACTOR = 0.843
@@ -32,19 +32,19 @@ DEFAULT_COLUMNS = [
 ]
 
 DEFAULT_ROWS = [
-    ["AIPI", 668.196, 34.04685, 33.79, 5.0, 0.124, "monthly", "all", ""],
-    ["CHPY", 440.524, 56.06939, 56.07, 6.0, 0.050, "monthly", "all", ""],
-    ["DIVO", 1087.280, 44.92944, 44.82, 10.0, 0.048, "monthly", "all", ""],
-    ["FEPI", 820.192, 39.99048, 40.55, 7.0, 0.120, "monthly", "all", ""],
-    ["GDXY", 3311.524, 13.10574, 13.11, 15.0, 0.180, "monthly", "all", ""],
-    ["IAU", 174.866, 84.63566, 84.64, 4.0, 0.000, "none", "none", ""],
-    ["IWMI", 306.959, 48.21481, 48.01, 4.0, 0.120, "monthly", "all", ""],
-    ["IYRI", 314.264, 46.93339, 46.93, 5.0, 0.080, "monthly", "all", ""],
-    ["MLPI", 273.825, 56.78753, 56.88, 4.0, 0.080, "quarterly", "3,6,9,12", ""],
-    ["QQQI", 655.929, 50.46252, 53.89, 10.0, 0.140, "monthly", "all", ""],
-    ["SPYI", 1116.585, 49.48005, 52.55, 12.0, 0.120, "monthly", "all", ""],
-    ["SVOL", 1542.230, 15.49701, 15.93, 6.0, 0.160, "monthly", "all", ""],
-    ["TLTW", 971.555, 22.28491, 22.57, 7.0, 0.120, "monthly", "all", ""],
+    ["AIPI", 668.196, 34.04685, 35.68, 5.0, 0.124, "monthly", "all", ""],
+    ["CHPY", 440.524, 56.06939, 67.70, 6.0, 0.050, "monthly", "all", ""],
+    ["DIVO", 1087.280, 44.92944, 45.13, 10.0, 0.048, "monthly", "all", ""],
+    ["FEPI", 820.192, 39.99048, 42.93, 7.0, 0.120, "monthly", "all", ""],
+    ["GDXY", 3311.524, 13.10574, 12.71, 15.0, 0.180, "monthly", "all", ""],
+    ["IAU", 174.866, 84.63566, 85.55, 4.0, 0.000, "none", "none", ""],
+    ["IWMI", 306.959, 48.21481, 50.37, 4.0, 0.120, "monthly", "all", ""],
+    ["IYRI", 314.264, 46.93339, 49.16, 5.0, 0.080, "monthly", "all", ""],
+    ["MLPI", 273.825, 56.78753, 56.38, 4.0, 0.080, "quarterly", "3,6,9,12", ""],
+    ["QQQI", 655.929, 50.46252, 53.86, 10.0, 0.140, "monthly", "all", ""],
+    ["SPYI", 1116.585, 49.48005, 52.14, 12.0, 0.120, "monthly", "all", ""],
+    ["SVOL", 1542.230, 15.49701, 15.91, 6.0, 0.160, "monthly", "all", ""],
+    ["TLTW", 971.555, 22.28491, 22.30, 7.0, 0.120, "monthly", "all", ""],
 ]
 
 SMART_INCOME_TIERS = {
@@ -121,9 +121,9 @@ def baseline_state_payload() -> dict:
         "total_contributions": DEFAULT_TOTAL_CONTRIBUTIONS,
         "use_live_prices": True,
         "auto_sync_prices": True,
-        "last_price_sync": "",
+        "last_price_sync": "2026-04-30 07:17:29 AM",
         "last_saved": "",
-        "last_deploy_message": "Loaded Fidelity reality baseline.",
+        "last_deploy_message": "Loaded real Fidelity production baseline.",
         "last_cash_message": f"FDRXX cash baseline: {format_dollars(DEFAULT_CASH_FDRXX)}.",
     }
 
@@ -156,17 +156,15 @@ def load_state() -> dict:
 
         loaded = normalize_state_payload(raw)
 
-        # IMPORTANT: if the saved JSON is from the old broken baseline,
-        # migrate it to the Fidelity reality baseline one time.
         if loaded.get("app_baseline_version") != APP_BASELINE_VERSION:
             migrated = baseline_state_payload()
-            migrated["last_deploy_message"] = "Migrated old saved file to Fidelity reality baseline."
+            migrated["last_deploy_message"] = "Migrated regular app to real production Fidelity snapshot baseline with restored color UI."
             return migrated
 
         return loaded
 
     except Exception as exc:
-        st.warning(f"Could not read saved state file. Loading Fidelity baseline. Error: {exc}")
+        st.warning(f"Could not read saved state file. Loading production Fidelity baseline. Error: {exc}")
         return baseline_state_payload()
 
 
@@ -253,11 +251,9 @@ def init_state() -> None:
     st.session_state.last_cash_message = loaded.get("last_cash_message", "")
     st.session_state.last_save_error = ""
     st.session_state.editor_version = 0
-
-    st.session_state.session_start_payload = make_state_payload()
     st.session_state.app_initialized = True
 
-    # Save migrated baseline immediately so tomorrow does not reload the old JSON.
+    st.session_state.session_start_payload = make_state_payload()
     save_state()
 
 
@@ -462,14 +458,8 @@ def deploy_cash_to_position(ticker: str, dollars: float, calc_df: pd.DataFrame) 
         str(row["ticker"]).upper().strip(): to_float(row.get("price_used", 0.0))
         for _, row in calc_df.iterrows()
     }
-    manual_price_lookup = {
-        str(row["ticker"]).upper().strip(): to_float(row.get("manual_price", 0.0))
-        for _, row in df.iterrows()
-    }
 
     price_used = round(to_float(price_lookup.get(ticker, 0.0)), 6)
-    if price_used <= 0:
-        price_used = round(to_float(manual_price_lookup.get(ticker, 0.0)), 6)
 
     if price_used <= 0:
         st.error(f"Could not determine a valid price for {ticker}.")
@@ -569,11 +559,6 @@ def build_smarter_income_suggestions(df: pd.DataFrame, available_cash: float) ->
     return pd.DataFrame(suggestions)
 
 
-# ============================================================
-# VISUAL DASHBOARD HELPERS
-# Cosmetic only: this section does NOT change accounting logic.
-# ============================================================
-
 def inject_dashboard_css() -> None:
     st.markdown(
         """
@@ -586,8 +571,9 @@ def inject_dashboard_css() -> None:
 
         .dashboard-title {
             font-size: 2.25rem;
-            font-weight: 800;
+            font-weight: 900;
             margin-bottom: 0.15rem;
+            color: #0f172a;
         }
 
         .dashboard-subtitle {
@@ -601,26 +587,30 @@ def inject_dashboard_css() -> None:
             padding: 26px 28px;
             margin: 10px 0 18px 0;
             background: linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #334155 100%);
-            color: white;
+            color: #ffffff !important;
             box-shadow: 0 14px 30px rgba(15, 23, 42, 0.22);
+        }
+
+        .hero-card * {
+            color: #ffffff !important;
         }
 
         .hero-label {
             font-size: 0.90rem;
             letter-spacing: 0.08em;
             text-transform: uppercase;
-            opacity: 0.78;
+            opacity: 0.82;
             margin-bottom: 4px;
         }
 
         .hero-number {
             font-size: 2.7rem;
-            font-weight: 850;
+            font-weight: 900;
             margin: 2px 0 2px 0;
         }
 
         .hero-small {
-            opacity: 0.88;
+            opacity: 0.92;
             font-size: 1.0rem;
             margin-top: 4px;
         }
@@ -642,71 +632,57 @@ def inject_dashboard_css() -> None:
         .metric-card {
             border-radius: 18px;
             padding: 18px 18px 16px 18px;
-            background: #ffffff;
-            border: 1px solid #e2e8f0;
-            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.07);
             margin-bottom: 12px;
             min-height: 118px;
         }
 
-        .metric-card-blue {
-            border-top: 5px solid #3b82f6;
+        .metric-blue {
+            background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
         }
 
-        .metric-card-green {
-            border-top: 5px solid #22c55e;
+        .metric-purple {
+            background: linear-gradient(135deg, #faf5ff 0%, #ede9fe 100%);
         }
 
-        .metric-card-yellow {
-            border-top: 5px solid #eab308;
+        .metric-green {
+            background: linear-gradient(135deg, #ecfdf5 0%, #dcfce7 100%);
         }
 
-        .metric-card-purple {
-            border-top: 5px solid #8b5cf6;
+        .metric-amber {
+            background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
         }
 
-        .metric-card-red {
-            border-top: 5px solid #ef4444;
-        }
-
-        .metric-icon {
-            font-size: 1.25rem;
-            margin-bottom: 4px;
+        .metric-gray {
+            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
         }
 
         .metric-label {
-            color: #64748b;
+            color: #334155 !important;
             font-size: 0.88rem;
-            font-weight: 650;
+            font-weight: 800;
             margin-bottom: 6px;
         }
 
         .metric-value {
-            color: #0f172a;
+            color: #0f172a !important;
             font-size: 1.55rem;
-            font-weight: 800;
+            font-weight: 900;
             line-height: 1.15;
         }
 
         .metric-note {
-            color: #64748b;
+            color: #475569 !important;
             font-size: 0.82rem;
             margin-top: 7px;
         }
 
-        .section-card {
-            border-radius: 18px;
-            padding: 18px 18px 10px 18px;
-            background: #f8fafc;
-            border: 1px solid #e2e8f0;
-            margin: 12px 0 18px 0;
-        }
-
         .section-title {
             font-size: 1.35rem;
-            font-weight: 800;
-            color: #0f172a;
+            font-weight: 900;
             margin-bottom: 2px;
+            color: #0f172a;
         }
 
         .section-subtitle {
@@ -720,21 +696,10 @@ def inject_dashboard_css() -> None:
             border-radius: 999px;
             padding: 5px 11px;
             font-size: 0.82rem;
-            font-weight: 700;
+            font-weight: 750;
             background: #ecfdf5;
-            color: #047857;
+            color: #047857 !important;
             border: 1px solid #bbf7d0;
-        }
-
-        .cash-pill {
-            display: inline-block;
-            border-radius: 999px;
-            padding: 5px 11px;
-            font-size: 0.82rem;
-            font-weight: 700;
-            background: #eff6ff;
-            color: #1d4ed8;
-            border: 1px solid #bfdbfe;
         }
         </style>
         """,
@@ -742,11 +707,24 @@ def inject_dashboard_css() -> None:
     )
 
 
-def render_card(icon: str, label: str, value: str, note: str = "", color: str = "blue") -> None:
+def render_card(icon: str, label: str, value: str, note: str = "") -> None:
+    label_lower = label.lower()
+
+    if any(word in label_lower for word in ["cash", "fdrxx", "deploy"]):
+        tone = "metric-green"
+    elif any(word in label_lower for word in ["income", "goal", "conservative", "realistic"]):
+        tone = "metric-purple"
+    elif any(word in label_lower for word in ["gain", "profit", "loss"]):
+        tone = "metric-amber"
+    elif any(word in label_lower for word in ["value", "basis", "contribution", "holdings"]):
+        tone = "metric-blue"
+    else:
+        tone = "metric-gray"
+
     st.markdown(
         f"""
-        <div class="metric-card metric-card-{color}">
-            <div class="metric-icon">{icon}</div>
+        <div class="metric-card {tone}">
+            <div style="font-size:1.25rem;margin-bottom:4px;">{icon}</div>
             <div class="metric-label">{label}</div>
             <div class="metric-value">{value}</div>
             <div class="metric-note">{note}</div>
@@ -775,7 +753,7 @@ def render_paycheck_hero(calc: dict) -> None:
     st.markdown(
         f"""
         <div class="hero-card">
-            <div class="hero-label">Retirement Paycheck Progress</div>
+            <div class="hero-label">Regular Production App</div>
             <div class="hero-number">{format_dollars(realistic)} / {format_dollars(GOAL_MONTHLY)}</div>
             <div class="hero-small">
                 Realistic monthly income estimate • {format_percent(progress_pct)} of your goal
@@ -796,33 +774,30 @@ def render_paycheck_hero(calc: dict) -> None:
 def render_metrics(calc: dict) -> None:
     render_paycheck_hero(calc)
 
-    gain_color = "green" if calc["net_vs_contributions"] >= 0 else "red"
-    holdings_gain_color = "green" if calc["holdings_gain_loss"] >= 0 else "red"
-
     render_section_header(
         "📊 Account Command Center",
-        "Big picture numbers only. Cash, total value, basis, and gains are separated clearly."
+        "Cash, total value, cost basis, and gains are separated clearly."
     )
 
     m1, m2, m3, m4 = st.columns(4)
     with m1:
-        render_card("💼", "Total Account Value", format_dollars(calc["total_portfolio_value"]), "Holdings + FDRXX cash", "blue")
+        render_card("💼", "Total Account Value", format_dollars(calc["total_portfolio_value"]), "Holdings + FDRXX cash")
     with m2:
-        render_card("📈", "Profit / Loss", format_dollars(calc["net_vs_contributions"]), "Total value minus total contributions", gain_color)
+        render_card("📈", "Profit / Loss", format_dollars(calc["net_vs_contributions"]), "Total value minus total contributions")
     with m3:
-        render_card("📦", "Holdings Value", format_dollars(calc["holdings_market_value"]), "Money currently invested in positions", "purple")
+        render_card("📦", "Holdings Value", format_dollars(calc["holdings_market_value"]), "Money currently invested")
     with m4:
-        render_card("💰", "Cash Ready (FDRXX)", format_dollars(calc["available_cash"]), "Available dry powder", "yellow")
+        render_card("💰", "Cash Ready (FDRXX)", format_dollars(calc["available_cash"]), "Available dry powder")
 
     b1, b2, b3, b4 = st.columns(4)
     with b1:
-        render_card("🧱", "Total Contributions", format_dollars(calc["total_contributions"]), "Your invested cost basis / money added", "blue")
+        render_card("🧱", "Total Contributions", format_dollars(calc["total_contributions"]), "Your total money added")
     with b2:
-        render_card("📦", "Deployed Cost Basis", format_dollars(calc["holdings_cost_basis"]), "Cost basis currently inside holdings", "purple")
+        render_card("📦", "Invested Cost Basis", format_dollars(calc["holdings_cost_basis"]), "Cost basis currently in holdings")
     with b3:
-        render_card("🟢" if calc["holdings_gain_loss"] >= 0 else "🔴", "Holdings Gain / Loss", format_dollars(calc["holdings_gain_loss"]), "Market value minus deployed basis", holdings_gain_color)
+        render_card("🟢", "Holdings Gain / Loss", format_dollars(calc["holdings_gain_loss"]), "Market value minus invested basis")
     with b4:
-        render_card("🎯", "Monthly Goal", format_dollars(GOAL_MONTHLY), f"Progress: {format_percent(calc['goal_progress'] * 100.0)}", "green")
+        render_card("🎯", "Monthly Goal", format_dollars(GOAL_MONTHLY), f"Progress: {format_percent(calc['goal_progress'] * 100.0)}")
 
 
 def render_top_controls(calc: dict) -> None:
@@ -833,11 +808,11 @@ def render_top_controls(calc: dict) -> None:
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        render_card("💰", "Available Cash (FDRXX)", format_dollars(calc["available_cash"]), "Cash available for deployment", "yellow")
+        render_card("💰", "Available Cash (FDRXX)", format_dollars(calc["available_cash"]), "Cash available for deployment")
     with c2:
-        render_card("🧱", "Total Contributions", format_dollars(st.session_state.total_contributions), "Your total invested cost basis", "blue")
+        render_card("🧱", "Total Contributions", format_dollars(st.session_state.total_contributions), "Your total money added")
     with c3:
-        render_card("📦", "Deployed Cost Basis", format_dollars(calc["holdings_cost_basis"]), "Cost basis currently in holdings", "purple")
+        render_card("📦", "Invested Cost Basis", format_dollars(calc["holdings_cost_basis"]), "Cost basis currently in holdings")
 
     st.markdown("#### Set Exact FDRXX Cash")
     with st.form("exact_cash_form"):
@@ -858,15 +833,15 @@ def render_top_controls(calc: dict) -> None:
     if st.session_state.get("last_cash_message"):
         st.info(st.session_state.last_cash_message)
 
-    st.markdown("#### Total Contributions / Invested Cost Basis")
+    st.markdown("#### Total Contributions")
     with st.form("contribution_form"):
         new_total = st.number_input(
-            "Total Contributions / Invested Cost Basis",
+            "Total Contributions",
             min_value=0.0,
             value=float(st.session_state.total_contributions),
             step=1000.0,
             format="%.2f",
-            help="This should match Fidelity total cost basis. Deploying cash does NOT change this.",
+            help="Deploying cash does NOT change this.",
         )
         saved = st.form_submit_button("Save Total Contributions", use_container_width=True)
 
@@ -902,10 +877,6 @@ def render_deploy_cash(calc: dict) -> None:
     calc_df = calc["df"].copy()
     available_cash = round_money(st.session_state.cash_fdrxx)
     ticker_options = sorted(calc_df["ticker"].astype(str).str.upper().tolist())
-
-    if not ticker_options:
-        st.info("No holdings available.")
-        return
 
     with st.form("deploy_cash_form", clear_on_submit=True):
         c1, c2, c3 = st.columns([1.3, 1.0, 0.9])
@@ -961,15 +932,11 @@ def render_holdings_editor() -> None:
 
     if st.button("Save Holdings Changes", use_container_width=True):
         cleaned = normalize_portfolio_df(edited_df)
-
         st.session_state.portfolio_df = cleaned.copy()
         st.session_state.editor_df = cleaned.copy()
         st.session_state.last_deploy_message = "Holdings table saved from latest visible editor values."
 
         ok = save_state()
-
-        # This is the key anti-revert step.
-        # After saving, force a brand-new editor key so stale table memory cannot repost old values.
         sync_editor_from_portfolio()
 
         if ok:
@@ -1049,7 +1016,7 @@ def render_breakdowns(calc: dict) -> None:
 def render_income_helper(calc: dict) -> None:
     render_section_header(
         "🧭 Suggested Use of Available Cash",
-        "This follows your income-machine priority rules: SPYI/DIVO first, then QQQI/FEPI, then smaller add-ons."
+        "Priority rules: SPYI/DIVO first, then QQQI/FEPI, then smaller add-ons."
     )
 
     suggestions = build_smarter_income_suggestions(calc["df"], calc["available_cash"])
@@ -1077,7 +1044,7 @@ def render_system_tools() -> None:
         "Backup, restore, reload, and safety tools."
     )
 
-    st.warning("Safety tip: use Download Snapshot Backup before big changes.")
+    st.warning("Use Download Snapshot Backup before big changes.")
 
     c1, c2, c3 = st.columns(3)
 
@@ -1096,9 +1063,8 @@ def render_system_tools() -> None:
     with c2:
         if st.button("Reload Saved File", use_container_width=True):
             loaded = load_state()
-            if loaded:
-                apply_state_dict(loaded, "Reloaded from saved JSON file.")
-                st.rerun()
+            apply_state_dict(loaded, "Reloaded from saved JSON file.")
+            st.rerun()
 
     with c3:
         if st.button("Save Now", use_container_width=True):
@@ -1151,16 +1117,18 @@ def render_system_tools() -> None:
 
     st.markdown("#### Dangerous Reset")
 
-    with st.expander("Reset to Fidelity Reality Baseline"):
-        st.error("Only use this if you want to wipe current dashboard numbers back to Fidelity reality baseline.")
-        confirm_reset = st.checkbox("I understand this will reset to Fidelity reality baseline.")
-        if st.button("Reset to Fidelity Reality Baseline", use_container_width=True, disabled=not confirm_reset):
+    with st.expander("Reset to Real Fidelity Production Baseline"):
+        st.error("Only use this if you want to wipe current numbers back to the uploaded Fidelity snapshot baseline.")
+        confirm_reset = st.checkbox("I understand this will reset to the real Fidelity production baseline.")
+        if st.button("Reset to Production Baseline", use_container_width=True, disabled=not confirm_reset):
             baseline = baseline_state_payload()
-            apply_state_dict(baseline, "Reset to Fidelity reality baseline complete.")
+            apply_state_dict(baseline, "Reset to real Fidelity production baseline complete.")
             save_state()
             st.rerun()
 
+    st.caption(f"App version: {APP_BASELINE_VERSION}")
     st.caption(f"Last saved: {st.session_state.get('last_saved', 'not yet') or 'not yet'}")
+
     if st.session_state.get("last_save_error"):
         st.error(f"Last save error: {st.session_state.last_save_error}")
 
@@ -1171,7 +1139,7 @@ def main() -> None:
 
     st.markdown('<div class="dashboard-title">💵 Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="dashboard-subtitle">Full dashboard view • Fidelity reality baseline • exact cash, holdings, and anti-revert save logic.</div>',
+        '<div class="dashboard-subtitle">Regular production app • real Fidelity snapshot baseline • exact cash, holdings, restored color UI, and anti-revert save logic.</div>',
         unsafe_allow_html=True,
     )
 

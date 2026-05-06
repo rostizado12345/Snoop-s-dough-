@@ -14,7 +14,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵", layout="wide")
 
-APP_BASELINE_VERSION = "2026-04-30-production-fidelity-snapshot-v2-color-ui"
+APP_BASELINE_VERSION = "2026-05-05-persistence-lock-v1"
 
 GOAL_MONTHLY = 8000.0
 REALISTIC_INCOME_FACTOR = 0.843
@@ -123,7 +123,7 @@ def baseline_state_payload() -> dict:
         "auto_sync_prices": True,
         "last_price_sync": "2026-04-30 07:17:29 AM",
         "last_saved": "",
-        "last_deploy_message": "Loaded real Fidelity production baseline.",
+        "last_deploy_message": "Loaded default Fidelity production baseline.",
         "last_cash_message": f"FDRXX cash baseline: {format_dollars(DEFAULT_CASH_FDRXX)}.",
     }
 
@@ -148,7 +148,10 @@ def normalize_state_payload(raw: dict) -> dict:
 
 def load_state() -> dict:
     if not os.path.exists(STATE_FILE):
-        return baseline_state_payload()
+        state = baseline_state_payload()
+        state["_loaded_from"] = "DEFAULT BASELINE - no saved file found"
+        state["_version_mismatch_fixed"] = False
+        return state
 
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
@@ -157,15 +160,22 @@ def load_state() -> dict:
         loaded = normalize_state_payload(raw)
 
         if loaded.get("app_baseline_version") != APP_BASELINE_VERSION:
-            migrated = baseline_state_payload()
-            migrated["last_deploy_message"] = "Migrated regular app to real production Fidelity snapshot baseline with restored color UI."
-            return migrated
+            loaded["app_baseline_version"] = APP_BASELINE_VERSION
+            loaded["_loaded_from"] = "SAVED FILE - version migrated, values preserved"
+            loaded["_version_mismatch_fixed"] = True
+            return loaded
 
+        loaded["_loaded_from"] = "SAVED FILE"
+        loaded["_version_mismatch_fixed"] = False
         return loaded
 
     except Exception as exc:
-        st.warning(f"Could not read saved state file. Loading production Fidelity baseline. Error: {exc}")
-        return baseline_state_payload()
+        st.warning(f"Could not read saved state file. Loading default baseline. Error: {exc}")
+        state = baseline_state_payload()
+        state["_loaded_from"] = "DEFAULT BASELINE - saved file unreadable"
+        state["_load_error"] = str(exc)
+        state["_version_mismatch_fixed"] = False
+        return state
 
 
 def make_state_payload() -> dict:
@@ -203,6 +213,7 @@ def save_state() -> bool:
         os.replace(temp_file, STATE_FILE)
 
         st.session_state.last_saved = payload["last_saved"]
+        st.session_state.loaded_from = "CURRENT SESSION - saved successfully"
         st.session_state.last_save_error = ""
         return True
     except Exception as exc:
@@ -233,6 +244,21 @@ def apply_state_dict(state: dict, message: str = "") -> None:
     sync_editor_from_portfolio()
 
 
+def build_session_start_payload_from_loaded_state() -> dict:
+    return {
+        "app_baseline_version": APP_BASELINE_VERSION,
+        "portfolio_df": normalize_portfolio_df(st.session_state.portfolio_df).to_dict(orient="records"),
+        "cash_fdrxx": round_money(st.session_state.cash_fdrxx),
+        "total_contributions": round_money(st.session_state.total_contributions),
+        "use_live_prices": bool(st.session_state.use_live_prices),
+        "auto_sync_prices": bool(st.session_state.auto_sync_prices),
+        "last_price_sync": str(st.session_state.last_price_sync),
+        "last_saved": str(st.session_state.last_saved),
+        "last_deploy_message": str(st.session_state.last_deploy_message),
+        "last_cash_message": str(st.session_state.last_cash_message),
+    }
+
+
 def init_state() -> None:
     if st.session_state.get("app_initialized", False):
         return
@@ -253,8 +279,14 @@ def init_state() -> None:
     st.session_state.editor_version = 0
     st.session_state.app_initialized = True
 
-    st.session_state.session_start_payload = make_state_payload()
-    save_state()
+    st.session_state.loaded_from = loaded.get("_loaded_from", "UNKNOWN")
+    st.session_state.version_mismatch_fixed = bool(loaded.get("_version_mismatch_fixed", False))
+    st.session_state.session_start_payload = build_session_start_payload_from_loaded_state()
+
+    # Important:
+    # Do NOT call save_state() here.
+    # The old app saved immediately on startup, which could overwrite good data
+    # with default/baseline data before the user noticed.
 
 
 def is_valid_price(live_price: float, fallback_price: float) -> bool:
@@ -744,6 +776,31 @@ def render_section_header(title: str, subtitle: str = "") -> None:
     )
 
 
+def render_state_health_box() -> None:
+    loaded_from = st.session_state.get("loaded_from", "UNKNOWN")
+    cash = st.session_state.get("cash_fdrxx", 0.0)
+    contributions = st.session_state.get("total_contributions", 0.0)
+    last_saved = st.session_state.get("last_saved", "") or "not saved yet"
+
+    if "SAVED FILE" in loaded_from or "CURRENT SESSION" in loaded_from:
+        st.success(
+            f"✅ State loaded from: {loaded_from} | "
+            f"Cash: {format_dollars(cash)} | "
+            f"Contributions: {format_dollars(contributions)} | "
+            f"Last saved: {last_saved}"
+        )
+    else:
+        st.error(
+            f"⚠️ State loaded from: {loaded_from} | "
+            f"Cash: {format_dollars(cash)} | "
+            f"Contributions: {format_dollars(contributions)} | "
+            f"Last saved: {last_saved}"
+        )
+
+    if st.session_state.get("version_mismatch_fixed", False):
+        st.info("App version changed, but your saved cash, holdings, and contributions were preserved instead of reset.")
+
+
 def render_paycheck_hero(calc: dict) -> None:
     realistic = calc["monthly_realistic"]
     conservative = calc["monthly_conservative"]
@@ -1064,6 +1121,8 @@ def render_system_tools() -> None:
         if st.button("Reload Saved File", use_container_width=True):
             loaded = load_state()
             apply_state_dict(loaded, "Reloaded from saved JSON file.")
+            st.session_state.loaded_from = loaded.get("_loaded_from", "UNKNOWN")
+            st.session_state.version_mismatch_fixed = bool(loaded.get("_version_mismatch_fixed", False))
             st.rerun()
 
     with c3:
@@ -1108,8 +1167,9 @@ def render_system_tools() -> None:
 
             if st.button("Restore Uploaded Snapshot", use_container_width=True):
                 apply_state_dict(uploaded_state, "Restored from uploaded snapshot backup.")
+                st.session_state.loaded_from = "UPLOADED SNAPSHOT - restored by user"
                 save_state()
-                st.success("Uploaded snapshot restored.")
+                st.success("Uploaded snapshot restored and saved.")
                 st.rerun()
 
         except Exception as exc:
@@ -1117,17 +1177,19 @@ def render_system_tools() -> None:
 
     st.markdown("#### Dangerous Reset")
 
-    with st.expander("Reset to Real Fidelity Production Baseline"):
-        st.error("Only use this if you want to wipe current numbers back to the uploaded Fidelity snapshot baseline.")
-        confirm_reset = st.checkbox("I understand this will reset to the real Fidelity production baseline.")
+    with st.expander("Reset to Default Fidelity Production Baseline"):
+        st.error("Only use this if you want to wipe current numbers back to the default baseline.")
+        confirm_reset = st.checkbox("I understand this will reset to the default Fidelity production baseline.")
         if st.button("Reset to Production Baseline", use_container_width=True, disabled=not confirm_reset):
             baseline = baseline_state_payload()
-            apply_state_dict(baseline, "Reset to real Fidelity production baseline complete.")
+            apply_state_dict(baseline, "Reset to default Fidelity production baseline complete.")
+            st.session_state.loaded_from = "DEFAULT BASELINE - manual reset"
             save_state()
             st.rerun()
 
     st.caption(f"App version: {APP_BASELINE_VERSION}")
     st.caption(f"Last saved: {st.session_state.get('last_saved', 'not yet') or 'not yet'}")
+    st.caption(f"Loaded from: {st.session_state.get('loaded_from', 'UNKNOWN')}")
 
     if st.session_state.get("last_save_error"):
         st.error(f"Last save error: {st.session_state.last_save_error}")
@@ -1139,9 +1201,11 @@ def main() -> None:
 
     st.markdown('<div class="dashboard-title">💵 Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="dashboard-subtitle">Regular production app • real Fidelity snapshot baseline • exact cash, holdings, restored color UI, and anti-revert save logic.</div>',
+        '<div class="dashboard-subtitle">Regular production app • persistence lock • saved-state protection • no startup overwrite.</div>',
         unsafe_allow_html=True,
     )
+
+    render_state_health_box()
 
     settings_cols = st.columns(3)
     with settings_cols[0]:

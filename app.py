@@ -1,6 +1,7 @@
 import json
 import os
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List
 
 import pandas as pd
@@ -14,14 +15,20 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵", layout="wide")
 
-APP_BASELINE_VERSION = "2026-05-05-persistence-lock-v1"
+APP_BASELINE_VERSION = "2026-05-11-hardened-persistence-v2"
 
 GOAL_MONTHLY = 8000.0
 REALISTIC_INCOME_FACTOR = 0.843
 CONSERVATIVE_INCOME_FACTOR = 0.632
 
-STATE_FILE = "retirement_dashboard_state.json"
-BACKUP_FILE = "retirement_dashboard_state_backup.json"
+APP_DIR = Path(__file__).resolve().parent
+STATE_DIR = APP_DIR / ".retirement_dashboard_state"
+STATE_DIR.mkdir(exist_ok=True)
+
+STATE_FILE = STATE_DIR / "retirement_dashboard_state.json"
+BACKUP_FILE = STATE_DIR / "retirement_dashboard_state_backup.json"
+LEGACY_STATE_FILE = APP_DIR / "retirement_dashboard_state.json"
+LEGACY_BACKUP_FILE = APP_DIR / "retirement_dashboard_state_backup.json"
 
 DEFAULT_CASH_FDRXX = 23690.85
 DEFAULT_TOTAL_CONTRIBUTIONS = 366299.07
@@ -121,7 +128,7 @@ def baseline_state_payload() -> dict:
         "total_contributions": DEFAULT_TOTAL_CONTRIBUTIONS,
         "use_live_prices": True,
         "auto_sync_prices": True,
-        "last_price_sync": "2026-04-30 07:17:29 AM",
+        "last_price_sync": "",
         "last_saved": "",
         "last_deploy_message": "Loaded default Fidelity production baseline.",
         "last_cash_message": f"FDRXX cash baseline: {format_dollars(DEFAULT_CASH_FDRXX)}.",
@@ -146,36 +153,75 @@ def normalize_state_payload(raw: dict) -> dict:
     }
 
 
+def read_json_file(path: Path) -> dict:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def write_json_atomic(path: Path, payload: dict) -> None:
+    path.parent.mkdir(exist_ok=True)
+    temp_file = path.with_suffix(path.suffix + ".tmp")
+    with open(temp_file, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    os.replace(temp_file, path)
+
+
+def candidate_state_files() -> List[Path]:
+    return [STATE_FILE, BACKUP_FILE, LEGACY_STATE_FILE, LEGACY_BACKUP_FILE]
+
+
 def load_state() -> dict:
-    if not os.path.exists(STATE_FILE):
-        state = baseline_state_payload()
-        state["_loaded_from"] = "DEFAULT BASELINE - no saved file found"
-        state["_version_mismatch_fixed"] = False
-        return state
+    errors = []
 
-    try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            raw = json.load(f)
+    for path in candidate_state_files():
+        if not path.exists():
+            continue
 
-        loaded = normalize_state_payload(raw)
+        try:
+            raw = read_json_file(path)
+            loaded = normalize_state_payload(raw)
 
-        if loaded.get("app_baseline_version") != APP_BASELINE_VERSION:
-            loaded["app_baseline_version"] = APP_BASELINE_VERSION
-            loaded["_loaded_from"] = "SAVED FILE - version migrated, values preserved"
-            loaded["_version_mismatch_fixed"] = True
+            if loaded.get("app_baseline_version") != APP_BASELINE_VERSION:
+                loaded["app_baseline_version"] = APP_BASELINE_VERSION
+                loaded["_loaded_from"] = f"SAVED FILE MIGRATED: {path}"
+                loaded["_version_mismatch_fixed"] = True
+            else:
+                loaded["_loaded_from"] = f"SAVED FILE: {path}"
+                loaded["_version_mismatch_fixed"] = False
+
+            loaded["_active_state_file"] = str(STATE_FILE)
+
+            if path != STATE_FILE:
+                write_json_atomic(STATE_FILE, make_payload_from_state(loaded))
+                loaded["_loaded_from"] += " | copied into active state file"
+
             return loaded
 
-        loaded["_loaded_from"] = "SAVED FILE"
-        loaded["_version_mismatch_fixed"] = False
-        return loaded
+        except Exception as exc:
+            errors.append(f"{path}: {exc}")
 
-    except Exception as exc:
-        st.warning(f"Could not read saved state file. Loading default baseline. Error: {exc}")
-        state = baseline_state_payload()
-        state["_loaded_from"] = "DEFAULT BASELINE - saved file unreadable"
-        state["_load_error"] = str(exc)
-        state["_version_mismatch_fixed"] = False
-        return state
+    state = baseline_state_payload()
+    state["_loaded_from"] = "DEFAULT BASELINE - no readable saved or backup file found"
+    state["_version_mismatch_fixed"] = False
+    state["_active_state_file"] = str(STATE_FILE)
+    state["_load_errors"] = errors
+    return state
+
+
+def make_payload_from_state(state: dict) -> dict:
+    df = normalize_portfolio_df(state["portfolio_df"])
+    return {
+        "app_baseline_version": APP_BASELINE_VERSION,
+        "portfolio_df": df.to_dict(orient="records"),
+        "cash_fdrxx": round_money(state["cash_fdrxx"]),
+        "total_contributions": round_money(state["total_contributions"]),
+        "use_live_prices": bool(state.get("use_live_prices", True)),
+        "auto_sync_prices": bool(state.get("auto_sync_prices", True)),
+        "last_price_sync": str(state.get("last_price_sync", "")),
+        "last_saved": str(state.get("last_saved", "")),
+        "last_deploy_message": str(state.get("last_deploy_message", "")),
+        "last_cash_message": str(state.get("last_cash_message", "")),
+    }
 
 
 def make_state_payload() -> dict:
@@ -198,24 +244,26 @@ def save_state() -> bool:
     try:
         payload = make_state_payload()
 
-        if os.path.exists(STATE_FILE):
+        if STATE_FILE.exists():
             try:
-                with open(STATE_FILE, "r", encoding="utf-8") as src:
-                    existing = src.read()
-                with open(BACKUP_FILE, "w", encoding="utf-8") as b:
-                    b.write(existing)
+                existing = read_json_file(STATE_FILE)
+                write_json_atomic(BACKUP_FILE, existing)
             except Exception:
                 pass
 
-        temp_file = STATE_FILE + ".tmp"
-        with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
-        os.replace(temp_file, STATE_FILE)
+        write_json_atomic(STATE_FILE, payload)
+
+        verify = read_json_file(STATE_FILE)
+        if round_money(verify.get("cash_fdrxx", -1)) != round_money(payload["cash_fdrxx"]):
+            raise RuntimeError("Save verification failed: cash did not match after write.")
+        if round_money(verify.get("total_contributions", -1)) != round_money(payload["total_contributions"]):
+            raise RuntimeError("Save verification failed: contributions did not match after write.")
 
         st.session_state.last_saved = payload["last_saved"]
-        st.session_state.loaded_from = "CURRENT SESSION - saved successfully"
+        st.session_state.loaded_from = f"CURRENT SESSION - saved successfully to {STATE_FILE}"
         st.session_state.last_save_error = ""
         return True
+
     except Exception as exc:
         st.session_state.last_save_error = str(exc)
         return False
@@ -281,12 +329,9 @@ def init_state() -> None:
 
     st.session_state.loaded_from = loaded.get("_loaded_from", "UNKNOWN")
     st.session_state.version_mismatch_fixed = bool(loaded.get("_version_mismatch_fixed", False))
+    st.session_state.active_state_file = str(STATE_FILE)
+    st.session_state.load_errors = loaded.get("_load_errors", [])
     st.session_state.session_start_payload = build_session_start_payload_from_loaded_state()
-
-    # Important:
-    # Do NOT call save_state() here.
-    # The old app saved immediately on startup, which could overwrite good data
-    # with default/baseline data before the user noticed.
 
 
 def is_valid_price(live_price: float, fallback_price: float) -> bool:
@@ -782,6 +827,9 @@ def render_state_health_box() -> None:
     contributions = st.session_state.get("total_contributions", 0.0)
     last_saved = st.session_state.get("last_saved", "") or "not saved yet"
 
+    state_exists = STATE_FILE.exists()
+    backup_exists = BACKUP_FILE.exists()
+
     if "SAVED FILE" in loaded_from or "CURRENT SESSION" in loaded_from:
         st.success(
             f"✅ State loaded from: {loaded_from} | "
@@ -797,8 +845,16 @@ def render_state_health_box() -> None:
             f"Last saved: {last_saved}"
         )
 
+    st.caption(f"Active save file: {STATE_FILE}")
+    st.caption(f"Save file exists now: {state_exists} | Backup exists now: {backup_exists}")
+
     if st.session_state.get("version_mismatch_fixed", False):
         st.info("App version changed, but your saved cash, holdings, and contributions were preserved instead of reset.")
+
+    if st.session_state.get("load_errors"):
+        with st.expander("Load errors found"):
+            for err in st.session_state.load_errors:
+                st.write(err)
 
 
 def render_paycheck_hero(calc: dict) -> None:
@@ -1126,9 +1182,9 @@ def render_system_tools() -> None:
             st.rerun()
 
     with c3:
-        if st.button("Save Now", use_container_width=True):
+        if st.button("Force Save State Now", use_container_width=True):
             if save_state():
-                st.success("Saved current dashboard state.")
+                st.success("Saved and verified current dashboard state.")
             else:
                 st.error(f"Save failed: {st.session_state.last_save_error}")
 
@@ -1175,6 +1231,20 @@ def render_system_tools() -> None:
         except Exception as exc:
             st.error(f"That file could not be restored. Error: {exc}")
 
+    st.markdown("#### Save Diagnostics")
+    st.caption(f"App version: {APP_BASELINE_VERSION}")
+    st.caption(f"Current working directory: {Path.cwd()}")
+    st.caption(f"App directory: {APP_DIR}")
+    st.caption(f"Active state file: {STATE_FILE}")
+    st.caption(f"Backup file: {BACKUP_FILE}")
+    st.caption(f"State file exists: {STATE_FILE.exists()}")
+    st.caption(f"Backup file exists: {BACKUP_FILE.exists()}")
+    st.caption(f"Last saved: {st.session_state.get('last_saved', 'not yet') or 'not yet'}")
+    st.caption(f"Loaded from: {st.session_state.get('loaded_from', 'UNKNOWN')}")
+
+    if st.session_state.get("last_save_error"):
+        st.error(f"Last save error: {st.session_state.last_save_error}")
+
     st.markdown("#### Dangerous Reset")
 
     with st.expander("Reset to Default Fidelity Production Baseline"):
@@ -1187,13 +1257,6 @@ def render_system_tools() -> None:
             save_state()
             st.rerun()
 
-    st.caption(f"App version: {APP_BASELINE_VERSION}")
-    st.caption(f"Last saved: {st.session_state.get('last_saved', 'not yet') or 'not yet'}")
-    st.caption(f"Loaded from: {st.session_state.get('loaded_from', 'UNKNOWN')}")
-
-    if st.session_state.get("last_save_error"):
-        st.error(f"Last save error: {st.session_state.last_save_error}")
-
 
 def main() -> None:
     init_state()
@@ -1201,7 +1264,7 @@ def main() -> None:
 
     st.markdown('<div class="dashboard-title">💵 Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="dashboard-subtitle">Regular production app • persistence lock • saved-state protection • no startup overwrite.</div>',
+        '<div class="dashboard-subtitle">Regular production app • hardened persistence • backup recovery • save verification.</div>',
         unsafe_allow_html=True,
     )
 
@@ -1209,9 +1272,19 @@ def main() -> None:
 
     settings_cols = st.columns(3)
     with settings_cols[0]:
-        st.session_state.use_live_prices = st.checkbox("Use Yahoo Finance live prices", value=bool(st.session_state.use_live_prices))
+        new_use_live = st.checkbox("Use Yahoo Finance live prices", value=bool(st.session_state.use_live_prices))
+        if new_use_live != st.session_state.use_live_prices:
+            st.session_state.use_live_prices = new_use_live
+            save_state()
+            st.rerun()
+
     with settings_cols[1]:
-        st.session_state.auto_sync_prices = st.checkbox("Auto-save good live prices as fallback", value=bool(st.session_state.auto_sync_prices))
+        new_auto_sync = st.checkbox("Auto-save good live prices as fallback", value=bool(st.session_state.auto_sync_prices))
+        if new_auto_sync != st.session_state.auto_sync_prices:
+            st.session_state.auto_sync_prices = new_auto_sync
+            save_state()
+            st.rerun()
+
     with settings_cols[2]:
         if st.button("Sync Prices Now", use_container_width=True):
             get_live_prices_cached.clear()

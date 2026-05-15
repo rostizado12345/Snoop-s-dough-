@@ -15,7 +15,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵", layout="wide")
 
-APP_BASELINE_VERSION = "2026-05-11-hardened-persistence-v2"
+APP_BASELINE_VERSION = "2026-05-14-smart-backup-loader-v3"
 
 GOAL_MONTHLY = 8000.0
 REALISTIC_INCOME_FACTOR = 0.843
@@ -27,11 +27,13 @@ STATE_DIR.mkdir(exist_ok=True)
 
 STATE_FILE = STATE_DIR / "retirement_dashboard_state.json"
 BACKUP_FILE = STATE_DIR / "retirement_dashboard_state_backup.json"
+LAST_GOOD_FILE = STATE_DIR / "retirement_dashboard_state_last_good.json"
 LEGACY_STATE_FILE = APP_DIR / "retirement_dashboard_state.json"
 LEGACY_BACKUP_FILE = APP_DIR / "retirement_dashboard_state_backup.json"
 
 DEFAULT_CASH_FDRXX = 23690.85
 DEFAULT_TOTAL_CONTRIBUTIONS = 366299.07
+EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K = 396299.07
 
 DEFAULT_COLUMNS = [
     "ticker", "qty", "avg_cost", "manual_price", "target_weight",
@@ -92,6 +94,15 @@ def format_dollars(value: float) -> str:
 
 def format_percent(value: float) -> str:
     return f"{float(value):,.1f}%"
+
+
+def parse_saved_time(value: str) -> datetime:
+    for fmt in ["%Y-%m-%d %I:%M:%S %p", "%Y-%m-%d %H:%M:%S"]:
+        try:
+            return datetime.strptime(str(value), fmt)
+        except Exception:
+            pass
+    return datetime.min
 
 
 def normalize_portfolio_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -167,45 +178,7 @@ def write_json_atomic(path: Path, payload: dict) -> None:
 
 
 def candidate_state_files() -> List[Path]:
-    return [STATE_FILE, BACKUP_FILE, LEGACY_STATE_FILE, LEGACY_BACKUP_FILE]
-
-
-def load_state() -> dict:
-    errors = []
-
-    for path in candidate_state_files():
-        if not path.exists():
-            continue
-
-        try:
-            raw = read_json_file(path)
-            loaded = normalize_state_payload(raw)
-
-            if loaded.get("app_baseline_version") != APP_BASELINE_VERSION:
-                loaded["app_baseline_version"] = APP_BASELINE_VERSION
-                loaded["_loaded_from"] = f"SAVED FILE MIGRATED: {path}"
-                loaded["_version_mismatch_fixed"] = True
-            else:
-                loaded["_loaded_from"] = f"SAVED FILE: {path}"
-                loaded["_version_mismatch_fixed"] = False
-
-            loaded["_active_state_file"] = str(STATE_FILE)
-
-            if path != STATE_FILE:
-                write_json_atomic(STATE_FILE, make_payload_from_state(loaded))
-                loaded["_loaded_from"] += " | copied into active state file"
-
-            return loaded
-
-        except Exception as exc:
-            errors.append(f"{path}: {exc}")
-
-    state = baseline_state_payload()
-    state["_loaded_from"] = "DEFAULT BASELINE - no readable saved or backup file found"
-    state["_version_mismatch_fixed"] = False
-    state["_active_state_file"] = str(STATE_FILE)
-    state["_load_errors"] = errors
-    return state
+    return [STATE_FILE, LAST_GOOD_FILE, BACKUP_FILE, LEGACY_STATE_FILE, LEGACY_BACKUP_FILE]
 
 
 def make_payload_from_state(state: dict) -> dict:
@@ -222,6 +195,70 @@ def make_payload_from_state(state: dict) -> dict:
         "last_deploy_message": str(state.get("last_deploy_message", "")),
         "last_cash_message": str(state.get("last_cash_message", "")),
     }
+
+
+def load_state() -> dict:
+    errors = []
+    candidates = []
+
+    for path in candidate_state_files():
+        if not path.exists():
+            continue
+
+        try:
+            raw = read_json_file(path)
+            loaded = normalize_state_payload(raw)
+            candidates.append(
+                {
+                    "path": path,
+                    "state": loaded,
+                    "last_saved_dt": parse_saved_time(loaded.get("last_saved", "")),
+                    "total_contributions": round_money(loaded.get("total_contributions", 0.0)),
+                    "cash_fdrxx": round_money(loaded.get("cash_fdrxx", 0.0)),
+                }
+            )
+        except Exception as exc:
+            errors.append(f"{path}: {exc}")
+
+    if candidates:
+        best = sorted(
+            candidates,
+            key=lambda x: (
+                x["total_contributions"],
+                x["last_saved_dt"],
+                x["cash_fdrxx"],
+            ),
+            reverse=True,
+        )[0]
+
+        loaded = best["state"]
+        path = best["path"]
+        payload = make_payload_from_state(loaded)
+
+        loaded["app_baseline_version"] = APP_BASELINE_VERSION
+        loaded["_loaded_from"] = f"BEST SAVED FILE SELECTED: {path}"
+        loaded["_version_mismatch_fixed"] = True
+        loaded["_active_state_file"] = str(STATE_FILE)
+        loaded["_load_errors"] = errors
+        loaded["_candidate_summary"] = [
+            f"{c['path']} | contributions {format_dollars(c['total_contributions'])} | cash {format_dollars(c['cash_fdrxx'])} | saved {c['state'].get('last_saved', '') or 'unknown'}"
+            for c in candidates
+        ]
+
+        write_json_atomic(STATE_FILE, payload)
+        write_json_atomic(BACKUP_FILE, payload)
+        if loaded["total_contributions"] >= EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K:
+            write_json_atomic(LAST_GOOD_FILE, payload)
+
+        return loaded
+
+    state = baseline_state_payload()
+    state["_loaded_from"] = "DEFAULT BASELINE - no readable saved or backup file found"
+    state["_version_mismatch_fixed"] = False
+    state["_active_state_file"] = str(STATE_FILE)
+    state["_load_errors"] = errors
+    state["_candidate_summary"] = []
+    return state
 
 
 def make_state_payload() -> dict:
@@ -247,11 +284,29 @@ def save_state() -> bool:
         if STATE_FILE.exists():
             try:
                 existing = read_json_file(STATE_FILE)
+                existing_norm = normalize_state_payload(existing)
+
+                # Do not let a stale/default screen overwrite a better saved file.
+                if (
+                    round_money(payload["total_contributions"]) < round_money(existing_norm["total_contributions"])
+                    and round_money(existing_norm["total_contributions"]) >= EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K
+                ):
+                    raise RuntimeError(
+                        "Protected save blocked: current screen has lower contributions than the existing saved file. "
+                        "Restore the latest backup or reload saved file before saving."
+                    )
+
                 write_json_atomic(BACKUP_FILE, existing)
+            except RuntimeError:
+                raise
             except Exception:
                 pass
 
         write_json_atomic(STATE_FILE, payload)
+        write_json_atomic(BACKUP_FILE, payload)
+
+        if round_money(payload["total_contributions"]) >= EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K:
+            write_json_atomic(LAST_GOOD_FILE, payload)
 
         verify = read_json_file(STATE_FILE)
         if round_money(verify.get("cash_fdrxx", -1)) != round_money(payload["cash_fdrxx"]):
@@ -331,6 +386,7 @@ def init_state() -> None:
     st.session_state.version_mismatch_fixed = bool(loaded.get("_version_mismatch_fixed", False))
     st.session_state.active_state_file = str(STATE_FILE)
     st.session_state.load_errors = loaded.get("_load_errors", [])
+    st.session_state.candidate_summary = loaded.get("_candidate_summary", [])
     st.session_state.session_start_payload = build_session_start_payload_from_loaded_state()
 
 
@@ -640,143 +696,39 @@ def inject_dashboard_css() -> None:
     st.markdown(
         """
         <style>
-        .main .block-container {
-            padding-top: 1.1rem;
-            padding-bottom: 2rem;
-            max-width: 1400px;
-        }
-
-        .dashboard-title {
-            font-size: 2.25rem;
-            font-weight: 900;
-            margin-bottom: 0.15rem;
-            color: #0f172a;
-        }
-
-        .dashboard-subtitle {
-            color: #64748b;
-            font-size: 1.02rem;
-            margin-bottom: 1.0rem;
-        }
-
+        .main .block-container { padding-top: 1.1rem; padding-bottom: 2rem; max-width: 1400px; }
+        .dashboard-title { font-size: 2.25rem; font-weight: 900; margin-bottom: 0.15rem; color: #0f172a; }
+        .dashboard-subtitle { color: #64748b; font-size: 1.02rem; margin-bottom: 1.0rem; }
         .hero-card {
-            border-radius: 24px;
-            padding: 26px 28px;
-            margin: 10px 0 18px 0;
+            border-radius: 24px; padding: 26px 28px; margin: 10px 0 18px 0;
             background: linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #334155 100%);
-            color: #ffffff !important;
-            box-shadow: 0 14px 30px rgba(15, 23, 42, 0.22);
+            color: #ffffff !important; box-shadow: 0 14px 30px rgba(15, 23, 42, 0.22);
         }
-
-        .hero-card * {
-            color: #ffffff !important;
-        }
-
-        .hero-label {
-            font-size: 0.90rem;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-            opacity: 0.82;
-            margin-bottom: 4px;
-        }
-
-        .hero-number {
-            font-size: 2.7rem;
-            font-weight: 900;
-            margin: 2px 0 2px 0;
-        }
-
-        .hero-small {
-            opacity: 0.92;
-            font-size: 1.0rem;
-            margin-top: 4px;
-        }
-
-        .paycheck-bar-wrap {
-            margin-top: 18px;
-            background: rgba(255,255,255,0.18);
-            border-radius: 999px;
-            height: 22px;
-            overflow: hidden;
-        }
-
-        .paycheck-bar-fill {
-            height: 22px;
-            background: linear-gradient(90deg, #22c55e, #84cc16);
-            border-radius: 999px;
-        }
-
+        .hero-card * { color: #ffffff !important; }
+        .hero-label { font-size: 0.90rem; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.82; margin-bottom: 4px; }
+        .hero-number { font-size: 2.7rem; font-weight: 900; margin: 2px 0 2px 0; }
+        .hero-small { opacity: 0.92; font-size: 1.0rem; margin-top: 4px; }
+        .paycheck-bar-wrap { margin-top: 18px; background: rgba(255,255,255,0.18); border-radius: 999px; height: 22px; overflow: hidden; }
+        .paycheck-bar-fill { height: 22px; background: linear-gradient(90deg, #22c55e, #84cc16); border-radius: 999px; }
         .metric-card {
-            border-radius: 18px;
-            padding: 18px 18px 16px 18px;
+            border-radius: 18px; padding: 18px 18px 16px 18px;
             border: 1px solid rgba(148, 163, 184, 0.35);
             box-shadow: 0 8px 20px rgba(15, 23, 42, 0.07);
-            margin-bottom: 12px;
-            min-height: 118px;
+            margin-bottom: 12px; min-height: 118px;
         }
-
-        .metric-blue {
-            background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
-        }
-
-        .metric-purple {
-            background: linear-gradient(135deg, #faf5ff 0%, #ede9fe 100%);
-        }
-
-        .metric-green {
-            background: linear-gradient(135deg, #ecfdf5 0%, #dcfce7 100%);
-        }
-
-        .metric-amber {
-            background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
-        }
-
-        .metric-gray {
-            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
-        }
-
-        .metric-label {
-            color: #334155 !important;
-            font-size: 0.88rem;
-            font-weight: 800;
-            margin-bottom: 6px;
-        }
-
-        .metric-value {
-            color: #0f172a !important;
-            font-size: 1.55rem;
-            font-weight: 900;
-            line-height: 1.15;
-        }
-
-        .metric-note {
-            color: #475569 !important;
-            font-size: 0.82rem;
-            margin-top: 7px;
-        }
-
-        .section-title {
-            font-size: 1.35rem;
-            font-weight: 900;
-            margin-bottom: 2px;
-            color: #0f172a;
-        }
-
-        .section-subtitle {
-            color: #64748b;
-            font-size: 0.93rem;
-            margin-bottom: 12px;
-        }
-
+        .metric-blue { background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); }
+        .metric-purple { background: linear-gradient(135deg, #faf5ff 0%, #ede9fe 100%); }
+        .metric-green { background: linear-gradient(135deg, #ecfdf5 0%, #dcfce7 100%); }
+        .metric-amber { background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); }
+        .metric-gray { background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); }
+        .metric-label { color: #334155 !important; font-size: 0.88rem; font-weight: 800; margin-bottom: 6px; }
+        .metric-value { color: #0f172a !important; font-size: 1.55rem; font-weight: 900; line-height: 1.15; }
+        .metric-note { color: #475569 !important; font-size: 0.82rem; margin-top: 7px; }
+        .section-title { font-size: 1.35rem; font-weight: 900; margin-bottom: 2px; color: #0f172a; }
+        .section-subtitle { color: #64748b; font-size: 0.93rem; margin-bottom: 12px; }
         .status-pill {
-            display: inline-block;
-            border-radius: 999px;
-            padding: 5px 11px;
-            font-size: 0.82rem;
-            font-weight: 750;
-            background: #ecfdf5;
-            color: #047857 !important;
-            border: 1px solid #bbf7d0;
+            display: inline-block; border-radius: 999px; padding: 5px 11px; font-size: 0.82rem; font-weight: 750;
+            background: #ecfdf5; color: #047857 !important; border: 1px solid #bbf7d0;
         }
         </style>
         """,
@@ -829,8 +781,9 @@ def render_state_health_box() -> None:
 
     state_exists = STATE_FILE.exists()
     backup_exists = BACKUP_FILE.exists()
+    last_good_exists = LAST_GOOD_FILE.exists()
 
-    if "SAVED FILE" in loaded_from or "CURRENT SESSION" in loaded_from:
+    if "BEST SAVED FILE" in loaded_from or "SAVED FILE" in loaded_from or "CURRENT SESSION" in loaded_from or "UPLOADED SNAPSHOT" in loaded_from:
         st.success(
             f"✅ State loaded from: {loaded_from} | "
             f"Cash: {format_dollars(cash)} | "
@@ -845,11 +798,25 @@ def render_state_health_box() -> None:
             f"Last saved: {last_saved}"
         )
 
+    if round_money(contributions) < EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K:
+        st.error(
+            f"🚨 Contributions are below the expected post-$30,000 number. "
+            f"Loaded: {format_dollars(contributions)} | Expected around: {format_dollars(EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K)}. "
+            f"Restore yesterday's snapshot before making new saves."
+        )
+    else:
+        st.info(f"✅ Contribution check passed: {format_dollars(contributions)} is at or above the expected post-$30,000 level.")
+
     st.caption(f"Active save file: {STATE_FILE}")
-    st.caption(f"Save file exists now: {state_exists} | Backup exists now: {backup_exists}")
+    st.caption(f"Save file exists now: {state_exists} | Backup exists now: {backup_exists} | Last-good exists now: {last_good_exists}")
 
     if st.session_state.get("version_mismatch_fixed", False):
-        st.info("App version changed, but your saved cash, holdings, and contributions were preserved instead of reset.")
+        st.info("Smart loader checked all saved files and selected the strongest available copy.")
+
+    if st.session_state.get("candidate_summary"):
+        with st.expander("Saved files checked by smart loader"):
+            for item in st.session_state.candidate_summary:
+                st.write(item)
 
     if st.session_state.get("load_errors"):
         with st.expander("Load errors found"):
@@ -962,6 +929,8 @@ def render_top_controls(calc: dict) -> None:
         st.session_state.total_contributions = round_money(new_total)
         if save_state():
             st.success("Total contributions saved.")
+        else:
+            st.error(f"Could not save: {st.session_state.last_save_error}")
         st.rerun()
 
     st.markdown("#### Add New Money to FDRXX")
@@ -1157,7 +1126,7 @@ def render_system_tools() -> None:
         "Backup, restore, reload, and safety tools."
     )
 
-    st.warning("Use Download Snapshot Backup before big changes.")
+    st.warning("Use Download Snapshot Backup before big changes. Do not overwrite your known-good backup with stale data.")
 
     c1, c2, c3 = st.columns(3)
 
@@ -1174,11 +1143,12 @@ def render_system_tools() -> None:
                 st.error(f"Could not reverse session: {exc}")
 
     with c2:
-        if st.button("Reload Saved File", use_container_width=True):
+        if st.button("Reload Best Saved File", use_container_width=True):
             loaded = load_state()
-            apply_state_dict(loaded, "Reloaded from saved JSON file.")
+            apply_state_dict(loaded, "Reloaded from best available saved JSON file.")
             st.session_state.loaded_from = loaded.get("_loaded_from", "UNKNOWN")
             st.session_state.version_mismatch_fixed = bool(loaded.get("_version_mismatch_fixed", False))
+            st.session_state.candidate_summary = loaded.get("_candidate_summary", [])
             st.rerun()
 
     with c3:
@@ -1221,11 +1191,23 @@ def render_system_tools() -> None:
                 f"Total Contributions {format_dollars(uploaded_state['total_contributions'])}."
             )
 
-            if st.button("Restore Uploaded Snapshot", use_container_width=True):
+            if uploaded_state["total_contributions"] < EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K:
+                st.error(
+                    "This uploaded backup appears to be older than the $30,000 contribution update. "
+                    "Only restore it if you are sure this is the file you want."
+                )
+
+            if st.button("Restore Uploaded Snapshot And Make It Active", use_container_width=True):
                 apply_state_dict(uploaded_state, "Restored from uploaded snapshot backup.")
-                st.session_state.loaded_from = "UPLOADED SNAPSHOT - restored by user"
+                st.session_state.loaded_from = "UPLOADED SNAPSHOT - restored and made active"
+                payload_to_save = make_payload_from_state(uploaded_state)
+                write_json_atomic(STATE_FILE, payload_to_save)
+                write_json_atomic(BACKUP_FILE, payload_to_save)
+                if uploaded_state["total_contributions"] >= EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K:
+                    write_json_atomic(LAST_GOOD_FILE, payload_to_save)
+                st.session_state.last_saved = payload_to_save.get("last_saved", "")
                 save_state()
-                st.success("Uploaded snapshot restored and saved.")
+                st.success("Uploaded snapshot restored, saved, backed up, and made active.")
                 st.rerun()
 
         except Exception as exc:
@@ -1237,8 +1219,10 @@ def render_system_tools() -> None:
     st.caption(f"App directory: {APP_DIR}")
     st.caption(f"Active state file: {STATE_FILE}")
     st.caption(f"Backup file: {BACKUP_FILE}")
+    st.caption(f"Last-good file: {LAST_GOOD_FILE}")
     st.caption(f"State file exists: {STATE_FILE.exists()}")
     st.caption(f"Backup file exists: {BACKUP_FILE.exists()}")
+    st.caption(f"Last-good file exists: {LAST_GOOD_FILE.exists()}")
     st.caption(f"Last saved: {st.session_state.get('last_saved', 'not yet') or 'not yet'}")
     st.caption(f"Loaded from: {st.session_state.get('loaded_from', 'UNKNOWN')}")
 
@@ -1264,7 +1248,7 @@ def main() -> None:
 
     st.markdown('<div class="dashboard-title">💵 Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="dashboard-subtitle">Regular production app • hardened persistence • backup recovery • save verification.</div>',
+        '<div class="dashboard-subtitle">Regular production app • smart backup loader • stale-save protection • restore recovery.</div>',
         unsafe_allow_html=True,
     )
 

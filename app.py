@@ -15,7 +15,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵", layout="wide")
 
-APP_BASELINE_VERSION = "2026-05-14-smart-backup-loader-v3"
+APP_BASELINE_VERSION = "2026-05-15-revert-proof-loader-v4"
 
 GOAL_MONTHLY = 8000.0
 REALISTIC_INCOME_FACTOR = 0.843
@@ -28,11 +28,19 @@ STATE_DIR.mkdir(exist_ok=True)
 STATE_FILE = STATE_DIR / "retirement_dashboard_state.json"
 BACKUP_FILE = STATE_DIR / "retirement_dashboard_state_backup.json"
 LAST_GOOD_FILE = STATE_DIR / "retirement_dashboard_state_last_good.json"
+
+# IMPORTANT:
+# These two root-level files are intentionally still used.
+# Some Streamlit/GitHub/cloud runs may lose or ignore the hidden folder.
+# Writing both places makes the app much harder to revert.
 LEGACY_STATE_FILE = APP_DIR / "retirement_dashboard_state.json"
 LEGACY_BACKUP_FILE = APP_DIR / "retirement_dashboard_state_backup.json"
+LEGACY_LAST_GOOD_FILE = APP_DIR / "retirement_dashboard_state_last_good.json"
 
-DEFAULT_CASH_FDRXX = 23690.85
-DEFAULT_TOTAL_CONTRIBUTIONS = 366299.07
+# Updated post-$30,000 reality baseline.
+# This prevents the app from falling back to the old $366,299.07 / $23,690.85 numbers.
+DEFAULT_CASH_FDRXX = 53690.85
+DEFAULT_TOTAL_CONTRIBUTIONS = 396299.07
 EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K = 396299.07
 
 DEFAULT_COLUMNS = [
@@ -132,6 +140,7 @@ def get_default_portfolio_df() -> pd.DataFrame:
 
 
 def baseline_state_payload() -> dict:
+    now = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
     return {
         "app_baseline_version": APP_BASELINE_VERSION,
         "portfolio_df": get_default_portfolio_df(),
@@ -140,8 +149,8 @@ def baseline_state_payload() -> dict:
         "use_live_prices": True,
         "auto_sync_prices": True,
         "last_price_sync": "",
-        "last_saved": "",
-        "last_deploy_message": "Loaded default Fidelity production baseline.",
+        "last_saved": now,
+        "last_deploy_message": "Loaded protected post-$30,000 Fidelity production baseline.",
         "last_cash_message": f"FDRXX cash baseline: {format_dollars(DEFAULT_CASH_FDRXX)}.",
     }
 
@@ -178,11 +187,22 @@ def write_json_atomic(path: Path, payload: dict) -> None:
 
 
 def candidate_state_files() -> List[Path]:
-    return [STATE_FILE, LAST_GOOD_FILE, BACKUP_FILE, LEGACY_STATE_FILE, LEGACY_BACKUP_FILE]
+    return [
+        STATE_FILE,
+        LAST_GOOD_FILE,
+        BACKUP_FILE,
+        LEGACY_STATE_FILE,
+        LEGACY_LAST_GOOD_FILE,
+        LEGACY_BACKUP_FILE,
+    ]
 
 
-def make_payload_from_state(state: dict) -> dict:
+def make_payload_from_state(state: dict, force_timestamp: bool = False) -> dict:
     df = normalize_portfolio_df(state["portfolio_df"])
+    saved_time = str(state.get("last_saved", ""))
+    if force_timestamp or saved_time.strip() == "":
+        saved_time = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
+
     return {
         "app_baseline_version": APP_BASELINE_VERSION,
         "portfolio_df": df.to_dict(orient="records"),
@@ -191,10 +211,30 @@ def make_payload_from_state(state: dict) -> dict:
         "use_live_prices": bool(state.get("use_live_prices", True)),
         "auto_sync_prices": bool(state.get("auto_sync_prices", True)),
         "last_price_sync": str(state.get("last_price_sync", "")),
-        "last_saved": str(state.get("last_saved", "")),
+        "last_saved": saved_time,
         "last_deploy_message": str(state.get("last_deploy_message", "")),
         "last_cash_message": str(state.get("last_cash_message", "")),
     }
+
+
+def state_score(item: dict) -> tuple:
+    # Higher wins. Contributions matter first, then cash, then saved time.
+    return (
+        round_money(item["total_contributions"]),
+        round_money(item["cash_fdrxx"]),
+        item["last_saved_dt"],
+    )
+
+
+def write_payload_everywhere(payload: dict) -> None:
+    write_json_atomic(STATE_FILE, payload)
+    write_json_atomic(BACKUP_FILE, payload)
+    write_json_atomic(LEGACY_STATE_FILE, payload)
+    write_json_atomic(LEGACY_BACKUP_FILE, payload)
+
+    if round_money(payload.get("total_contributions", 0.0)) >= EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K:
+        write_json_atomic(LAST_GOOD_FILE, payload)
+        write_json_atomic(LEGACY_LAST_GOOD_FILE, payload)
 
 
 def load_state() -> dict:
@@ -221,22 +261,12 @@ def load_state() -> dict:
             errors.append(f"{path}: {exc}")
 
     if candidates:
-        best = sorted(
-            candidates,
-            key=lambda x: (
-                x["total_contributions"],
-                x["last_saved_dt"],
-                x["cash_fdrxx"],
-            ),
-            reverse=True,
-        )[0]
-
+        best = sorted(candidates, key=state_score, reverse=True)[0]
         loaded = best["state"]
-        path = best["path"]
-        payload = make_payload_from_state(loaded)
+        payload = make_payload_from_state(loaded, force_timestamp=True)
 
         loaded["app_baseline_version"] = APP_BASELINE_VERSION
-        loaded["_loaded_from"] = f"BEST SAVED FILE SELECTED: {path}"
+        loaded["_loaded_from"] = f"BEST SAVED FILE SELECTED: {best['path']}"
         loaded["_version_mismatch_fixed"] = True
         loaded["_active_state_file"] = str(STATE_FILE)
         loaded["_load_errors"] = errors
@@ -245,19 +275,23 @@ def load_state() -> dict:
             for c in candidates
         ]
 
-        write_json_atomic(STATE_FILE, payload)
-        write_json_atomic(BACKUP_FILE, payload)
-        if loaded["total_contributions"] >= EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K:
-            write_json_atomic(LAST_GOOD_FILE, payload)
+        # Self-heal: copy the winning state everywhere immediately.
+        write_payload_everywhere(payload)
 
+        loaded["last_saved"] = payload["last_saved"]
         return loaded
 
+    # No readable saved files. Use the NEW post-$30K baseline, not the old stale baseline.
     state = baseline_state_payload()
-    state["_loaded_from"] = "DEFAULT BASELINE - no readable saved or backup file found"
+    payload = make_payload_from_state(state, force_timestamp=True)
+    write_payload_everywhere(payload)
+
+    state["_loaded_from"] = "PROTECTED POST-$30K BASELINE - no readable saved or backup file found"
     state["_version_mismatch_fixed"] = False
     state["_active_state_file"] = str(STATE_FILE)
     state["_load_errors"] = errors
     state["_candidate_summary"] = []
+    state["last_saved"] = payload["last_saved"]
     return state
 
 
@@ -281,41 +315,37 @@ def save_state() -> bool:
     try:
         payload = make_state_payload()
 
-        if STATE_FILE.exists():
+        existing_candidates = []
+        for path in candidate_state_files():
+            if not path.exists():
+                continue
             try:
-                existing = read_json_file(STATE_FILE)
-                existing_norm = normalize_state_payload(existing)
-
-                # Do not let a stale/default screen overwrite a better saved file.
-                if (
-                    round_money(payload["total_contributions"]) < round_money(existing_norm["total_contributions"])
-                    and round_money(existing_norm["total_contributions"]) >= EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K
-                ):
-                    raise RuntimeError(
-                        "Protected save blocked: current screen has lower contributions than the existing saved file. "
-                        "Restore the latest backup or reload saved file before saving."
-                    )
-
-                write_json_atomic(BACKUP_FILE, existing)
-            except RuntimeError:
-                raise
+                existing_norm = normalize_state_payload(read_json_file(path))
+                existing_candidates.append(existing_norm)
             except Exception:
                 pass
 
-        write_json_atomic(STATE_FILE, payload)
-        write_json_atomic(BACKUP_FILE, payload)
+        # Do not let a stale/default screen overwrite a better post-$30K saved file.
+        for existing_norm in existing_candidates:
+            if (
+                round_money(payload["total_contributions"]) < round_money(existing_norm["total_contributions"])
+                and round_money(existing_norm["total_contributions"]) >= EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K
+            ):
+                raise RuntimeError(
+                    "Protected save blocked: current screen has lower contributions than an existing saved file. "
+                    "Use Reload Best Saved File or restore the latest snapshot before saving."
+                )
 
-        if round_money(payload["total_contributions"]) >= EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K:
-            write_json_atomic(LAST_GOOD_FILE, payload)
+        write_payload_everywhere(payload)
 
-        verify = read_json_file(STATE_FILE)
+        verify = normalize_state_payload(read_json_file(STATE_FILE))
         if round_money(verify.get("cash_fdrxx", -1)) != round_money(payload["cash_fdrxx"]):
             raise RuntimeError("Save verification failed: cash did not match after write.")
         if round_money(verify.get("total_contributions", -1)) != round_money(payload["total_contributions"]):
             raise RuntimeError("Save verification failed: contributions did not match after write.")
 
         st.session_state.last_saved = payload["last_saved"]
-        st.session_state.loaded_from = f"CURRENT SESSION - saved successfully to {STATE_FILE}"
+        st.session_state.loaded_from = f"CURRENT SESSION - saved successfully to {STATE_FILE} and root backup files"
         st.session_state.last_save_error = ""
         return True
 
@@ -782,21 +812,27 @@ def render_state_health_box() -> None:
     state_exists = STATE_FILE.exists()
     backup_exists = BACKUP_FILE.exists()
     last_good_exists = LAST_GOOD_FILE.exists()
+    legacy_exists = LEGACY_STATE_FILE.exists()
+    legacy_backup_exists = LEGACY_BACKUP_FILE.exists()
 
-    if "BEST SAVED FILE" in loaded_from or "SAVED FILE" in loaded_from or "CURRENT SESSION" in loaded_from or "UPLOADED SNAPSHOT" in loaded_from:
-        st.success(
-            f"✅ State loaded from: {loaded_from} | "
-            f"Cash: {format_dollars(cash)} | "
-            f"Contributions: {format_dollars(contributions)} | "
-            f"Last saved: {last_saved}"
-        )
+    good_loader = (
+        "BEST SAVED FILE" in loaded_from
+        or "CURRENT SESSION" in loaded_from
+        or "UPLOADED SNAPSHOT" in loaded_from
+        or "PROTECTED POST-$30K" in loaded_from
+    )
+
+    message = (
+        f"State loaded from: {loaded_from}\n\n"
+        f"Cash: {format_dollars(cash)} | "
+        f"Contributions: {format_dollars(contributions)} | "
+        f"Last saved: {last_saved}"
+    )
+
+    if good_loader:
+        st.success(message)
     else:
-        st.error(
-            f"⚠️ State loaded from: {loaded_from} | "
-            f"Cash: {format_dollars(cash)} | "
-            f"Contributions: {format_dollars(contributions)} | "
-            f"Last saved: {last_saved}"
-        )
+        st.error(message)
 
     if round_money(contributions) < EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K:
         st.error(
@@ -805,13 +841,19 @@ def render_state_health_box() -> None:
             f"Restore yesterday's snapshot before making new saves."
         )
     else:
-        st.info(f"✅ Contribution check passed: {format_dollars(contributions)} is at or above the expected post-$30,000 level.")
+        st.info(
+            f"✅ Contribution check passed: {format_dollars(contributions)} "
+            f"is at or above the expected post-$30,000 level."
+        )
 
     st.caption(f"Active save file: {STATE_FILE}")
-    st.caption(f"Save file exists now: {state_exists} | Backup exists now: {backup_exists} | Last-good exists now: {last_good_exists}")
+    st.caption(
+        f"Hidden save: {state_exists} | Hidden backup: {backup_exists} | Hidden last-good: {last_good_exists} | "
+        f"Root save: {legacy_exists} | Root backup: {legacy_backup_exists}"
+    )
 
     if st.session_state.get("version_mismatch_fixed", False):
-        st.info("Smart loader checked all saved files and selected the strongest available copy.")
+        st.info("Smart loader checked all saved files and copied the strongest available state into every backup location.")
 
     if st.session_state.get("candidate_summary"):
         with st.expander("Saved files checked by smart loader"):
@@ -1200,14 +1242,11 @@ def render_system_tools() -> None:
             if st.button("Restore Uploaded Snapshot And Make It Active", use_container_width=True):
                 apply_state_dict(uploaded_state, "Restored from uploaded snapshot backup.")
                 st.session_state.loaded_from = "UPLOADED SNAPSHOT - restored and made active"
-                payload_to_save = make_payload_from_state(uploaded_state)
-                write_json_atomic(STATE_FILE, payload_to_save)
-                write_json_atomic(BACKUP_FILE, payload_to_save)
-                if uploaded_state["total_contributions"] >= EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K:
-                    write_json_atomic(LAST_GOOD_FILE, payload_to_save)
+                payload_to_save = make_payload_from_state(uploaded_state, force_timestamp=True)
+                write_payload_everywhere(payload_to_save)
                 st.session_state.last_saved = payload_to_save.get("last_saved", "")
                 save_state()
-                st.success("Uploaded snapshot restored, saved, backed up, and made active.")
+                st.success("Uploaded snapshot restored, saved, backed up in all locations, and made active.")
                 st.rerun()
 
         except Exception as exc:
@@ -1217,12 +1256,18 @@ def render_system_tools() -> None:
     st.caption(f"App version: {APP_BASELINE_VERSION}")
     st.caption(f"Current working directory: {Path.cwd()}")
     st.caption(f"App directory: {APP_DIR}")
-    st.caption(f"Active state file: {STATE_FILE}")
-    st.caption(f"Backup file: {BACKUP_FILE}")
-    st.caption(f"Last-good file: {LAST_GOOD_FILE}")
-    st.caption(f"State file exists: {STATE_FILE.exists()}")
-    st.caption(f"Backup file exists: {BACKUP_FILE.exists()}")
-    st.caption(f"Last-good file exists: {LAST_GOOD_FILE.exists()}")
+    st.caption(f"Hidden active state file: {STATE_FILE}")
+    st.caption(f"Hidden backup file: {BACKUP_FILE}")
+    st.caption(f"Hidden last-good file: {LAST_GOOD_FILE}")
+    st.caption(f"Root state file: {LEGACY_STATE_FILE}")
+    st.caption(f"Root backup file: {LEGACY_BACKUP_FILE}")
+    st.caption(f"Root last-good file: {LEGACY_LAST_GOOD_FILE}")
+    st.caption(f"Hidden state exists: {STATE_FILE.exists()}")
+    st.caption(f"Hidden backup exists: {BACKUP_FILE.exists()}")
+    st.caption(f"Hidden last-good exists: {LAST_GOOD_FILE.exists()}")
+    st.caption(f"Root state exists: {LEGACY_STATE_FILE.exists()}")
+    st.caption(f"Root backup exists: {LEGACY_BACKUP_FILE.exists()}")
+    st.caption(f"Root last-good exists: {LEGACY_LAST_GOOD_FILE.exists()}")
     st.caption(f"Last saved: {st.session_state.get('last_saved', 'not yet') or 'not yet'}")
     st.caption(f"Loaded from: {st.session_state.get('loaded_from', 'UNKNOWN')}")
 
@@ -1231,13 +1276,13 @@ def render_system_tools() -> None:
 
     st.markdown("#### Dangerous Reset")
 
-    with st.expander("Reset to Default Fidelity Production Baseline"):
-        st.error("Only use this if you want to wipe current numbers back to the default baseline.")
-        confirm_reset = st.checkbox("I understand this will reset to the default Fidelity production baseline.")
-        if st.button("Reset to Production Baseline", use_container_width=True, disabled=not confirm_reset):
+    with st.expander("Reset to Protected Post-$30K Production Baseline"):
+        st.error("Only use this if you want to wipe current numbers back to the protected post-$30K baseline.")
+        confirm_reset = st.checkbox("I understand this will reset to the protected post-$30K production baseline.")
+        if st.button("Reset to Protected Baseline", use_container_width=True, disabled=not confirm_reset):
             baseline = baseline_state_payload()
-            apply_state_dict(baseline, "Reset to default Fidelity production baseline complete.")
-            st.session_state.loaded_from = "DEFAULT BASELINE - manual reset"
+            apply_state_dict(baseline, "Reset to protected post-$30K production baseline complete.")
+            st.session_state.loaded_from = "PROTECTED POST-$30K BASELINE - manual reset"
             save_state()
             st.rerun()
 
@@ -1248,7 +1293,7 @@ def main() -> None:
 
     st.markdown('<div class="dashboard-title">💵 Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="dashboard-subtitle">Regular production app • smart backup loader • stale-save protection • restore recovery.</div>',
+        '<div class="dashboard-subtitle">Regular production app • revert-proof loader • stale-save protection • restore recovery.</div>',
         unsafe_allow_html=True,
     )
 

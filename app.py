@@ -888,7 +888,7 @@ def render_metrics(calc: dict) -> None:
 
     render_section_header(
         "📊 Account Command Center",
-        "Cash, total value, profit/loss, contributions, and cost basis are separated clearly."
+        "Cash, total value, cost basis, and gains are separated clearly."
     )
 
     m1, m2 = st.columns(2)
@@ -903,13 +903,11 @@ def render_metrics(calc: dict) -> None:
     with b2:
         render_card("📦", "Invested Cost Basis", format_dollars(calc["holdings_cost_basis"]), "Cost basis currently in holdings")
 
-    p1, p2, p3 = st.columns(3)
-    with p1:
-        render_card("🧾", "Total Contributions", format_dollars(calc["total_contributions"]), "Total new money added")
-    with p2:
-        render_card("📈", "Actual Profit/Loss", format_dollars(calc["holdings_gain_loss"]), "Holdings value minus invested cost basis")
-    with p3:
-        render_card("⚖️", "Net vs Contributions", format_dollars(calc["net_vs_contributions"]), "Total account value minus total contributions")
+    g1, g2 = st.columns(2)
+    with g1:
+        render_card("🟢", "Holdings Gain / Loss", format_dollars(calc["holdings_gain_loss"]), "Market value minus invested basis")
+    with g2:
+        st.empty()
 
 
 def render_top_controls(calc: dict) -> None:

@@ -898,28 +898,20 @@ def render_metrics(calc: dict) -> None:
 
     render_section_header(
         "📊 Account Command Center",
-        "Cash, total value, cost basis, and gains are separated clearly."
+        "Cash, total value, and cost basis are separated clearly."
     )
 
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2 = st.columns(2)
     with m1:
         render_card("💼", "Total Account Value", format_dollars(calc["total_portfolio_value"]), "Holdings + FDRXX cash")
     with m2:
-        render_card("📈", "Profit / Loss", format_dollars(calc["net_vs_contributions"]), "Total value minus total contributions")
-    with m3:
         render_card("📦", "Holdings Value", format_dollars(calc["holdings_market_value"]), "Money currently invested")
-    with m4:
-        render_card("💰", "Cash Ready (FDRXX)", format_dollars(calc["available_cash"]), "Available dry powder")
 
-    b1, b2, b3, b4 = st.columns(4)
+    b1, b2 = st.columns(2)
     with b1:
-        render_card("🧱", "Total Contributions", format_dollars(calc["total_contributions"]), "Your total money added")
+        render_card("💰", "Cash Ready (FDRXX)", format_dollars(calc["available_cash"]), "Available dry powder")
     with b2:
         render_card("📦", "Invested Cost Basis", format_dollars(calc["holdings_cost_basis"]), "Cost basis currently in holdings")
-    with b3:
-        render_card("🟢", "Holdings Gain / Loss", format_dollars(calc["holdings_gain_loss"]), "Market value minus invested basis")
-    with b4:
-        render_card("🎯", "Monthly Goal", format_dollars(GOAL_MONTHLY), f"Progress: {format_percent(calc['goal_progress'] * 100.0)}")
 
 
 def render_top_controls(calc: dict) -> None:
@@ -927,14 +919,6 @@ def render_top_controls(calc: dict) -> None:
         "💰 Cash Command Center",
         "Use this area to match Fidelity cash, update total contributions, or add new money."
     )
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        render_card("💰", "Available Cash (FDRXX)", format_dollars(calc["available_cash"]), "Cash available for deployment")
-    with c2:
-        render_card("🧱", "Total Contributions", format_dollars(st.session_state.total_contributions), "Your total money added")
-    with c3:
-        render_card("📦", "Invested Cost Basis", format_dollars(calc["holdings_cost_basis"]), "Cost basis currently in holdings")
 
     st.markdown("#### Set Exact FDRXX Cash")
     with st.form("exact_cash_form"):

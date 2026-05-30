@@ -29,16 +29,10 @@ STATE_FILE = STATE_DIR / "retirement_dashboard_state.json"
 BACKUP_FILE = STATE_DIR / "retirement_dashboard_state_backup.json"
 LAST_GOOD_FILE = STATE_DIR / "retirement_dashboard_state_last_good.json"
 
-# IMPORTANT:
-# These two root-level files are intentionally still used.
-# Some Streamlit/GitHub/cloud runs may lose or ignore the hidden folder.
-# Writing both places makes the app much harder to revert.
 LEGACY_STATE_FILE = APP_DIR / "retirement_dashboard_state.json"
 LEGACY_BACKUP_FILE = APP_DIR / "retirement_dashboard_state_backup.json"
 LEGACY_LAST_GOOD_FILE = APP_DIR / "retirement_dashboard_state_last_good.json"
 
-# Updated post-$30,000 reality baseline.
-# This prevents the app from falling back to the old $366,299.07 / $23,690.85 numbers.
 DEFAULT_CASH_FDRXX = 53690.85
 DEFAULT_TOTAL_CONTRIBUTIONS = 396299.07
 EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K = 396299.07
@@ -218,7 +212,6 @@ def make_payload_from_state(state: dict, force_timestamp: bool = False) -> dict:
 
 
 def state_score(item: dict) -> tuple:
-    # Higher wins. Contributions matter first, then cash, then saved time.
     return (
         round_money(item["total_contributions"]),
         round_money(item["cash_fdrxx"]),
@@ -275,13 +268,11 @@ def load_state() -> dict:
             for c in candidates
         ]
 
-        # Self-heal: copy the winning state everywhere immediately.
         write_payload_everywhere(payload)
 
         loaded["last_saved"] = payload["last_saved"]
         return loaded
 
-    # No readable saved files. Use the NEW post-$30K baseline, not the old stale baseline.
     state = baseline_state_payload()
     payload = make_payload_from_state(state, force_timestamp=True)
     write_payload_everywhere(payload)
@@ -325,7 +316,6 @@ def save_state() -> bool:
             except Exception:
                 pass
 
-        # Do not let a stale/default screen overwrite a better post-$30K saved file.
         for existing_norm in existing_candidates:
             if (
                 round_money(payload["total_contributions"]) < round_money(existing_norm["total_contributions"])
@@ -898,7 +888,7 @@ def render_metrics(calc: dict) -> None:
 
     render_section_header(
         "📊 Account Command Center",
-        "Cash, total value, and cost basis are separated clearly."
+        "Cash, total value, profit/loss, contributions, and cost basis are separated clearly."
     )
 
     m1, m2 = st.columns(2)
@@ -912,6 +902,14 @@ def render_metrics(calc: dict) -> None:
         render_card("💰", "Cash Ready (FDRXX)", format_dollars(calc["available_cash"]), "Available dry powder")
     with b2:
         render_card("📦", "Invested Cost Basis", format_dollars(calc["holdings_cost_basis"]), "Cost basis currently in holdings")
+
+    p1, p2, p3 = st.columns(3)
+    with p1:
+        render_card("🧾", "Total Contributions", format_dollars(calc["total_contributions"]), "Total new money added")
+    with p2:
+        render_card("📈", "Actual Profit/Loss", format_dollars(calc["holdings_gain_loss"]), "Holdings value minus invested cost basis")
+    with p3:
+        render_card("⚖️", "Net vs Contributions", format_dollars(calc["net_vs_contributions"]), "Total account value minus total contributions")
 
 
 def render_top_controls(calc: dict) -> None:

@@ -29,16 +29,10 @@ STATE_FILE = STATE_DIR / "retirement_dashboard_state.json"
 BACKUP_FILE = STATE_DIR / "retirement_dashboard_state_backup.json"
 LAST_GOOD_FILE = STATE_DIR / "retirement_dashboard_state_last_good.json"
 
-# IMPORTANT:
-# These two root-level files are intentionally still used.
-# Some Streamlit/GitHub/cloud runs may lose or ignore the hidden folder.
-# Writing both places makes the app much harder to revert.
 LEGACY_STATE_FILE = APP_DIR / "retirement_dashboard_state.json"
 LEGACY_BACKUP_FILE = APP_DIR / "retirement_dashboard_state_backup.json"
 LEGACY_LAST_GOOD_FILE = APP_DIR / "retirement_dashboard_state_last_good.json"
 
-# Updated post-$30,000 reality baseline.
-# This prevents the app from falling back to the old $366,299.07 / $23,690.85 numbers.
 DEFAULT_CASH_FDRXX = 53690.85
 DEFAULT_TOTAL_CONTRIBUTIONS = 396299.07
 EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K = 396299.07
@@ -218,7 +212,6 @@ def make_payload_from_state(state: dict, force_timestamp: bool = False) -> dict:
 
 
 def state_score(item: dict) -> tuple:
-    # Higher wins. Contributions matter first, then cash, then saved time.
     return (
         round_money(item["total_contributions"]),
         round_money(item["cash_fdrxx"]),
@@ -275,13 +268,11 @@ def load_state() -> dict:
             for c in candidates
         ]
 
-        # Self-heal: copy the winning state everywhere immediately.
         write_payload_everywhere(payload)
 
         loaded["last_saved"] = payload["last_saved"]
         return loaded
 
-    # No readable saved files. Use the NEW post-$30K baseline, not the old stale baseline.
     state = baseline_state_payload()
     payload = make_payload_from_state(state, force_timestamp=True)
     write_payload_everywhere(payload)
@@ -325,7 +316,6 @@ def save_state() -> bool:
             except Exception:
                 pass
 
-        # Do not let a stale/default screen overwrite a better post-$30K saved file.
         for existing_norm in existing_candidates:
             if (
                 round_money(payload["total_contributions"]) < round_money(existing_norm["total_contributions"])
@@ -901,25 +891,23 @@ def render_metrics(calc: dict) -> None:
         "Cash, total value, cost basis, and gains are separated clearly."
     )
 
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2 = st.columns(2)
     with m1:
         render_card("💼", "Total Account Value", format_dollars(calc["total_portfolio_value"]), "Holdings + FDRXX cash")
     with m2:
-        render_card("📈", "Profit / Loss", format_dollars(calc["net_vs_contributions"]), "Total value minus total contributions")
-    with m3:
         render_card("📦", "Holdings Value", format_dollars(calc["holdings_market_value"]), "Money currently invested")
-    with m4:
-        render_card("💰", "Cash Ready (FDRXX)", format_dollars(calc["available_cash"]), "Available dry powder")
 
-    b1, b2, b3, b4 = st.columns(4)
+    b1, b2 = st.columns(2)
     with b1:
-        render_card("🧱", "Total Contributions", format_dollars(calc["total_contributions"]), "Your total money added")
+        render_card("💰", "Cash Ready (FDRXX)", format_dollars(calc["available_cash"]), "Available dry powder")
     with b2:
         render_card("📦", "Invested Cost Basis", format_dollars(calc["holdings_cost_basis"]), "Cost basis currently in holdings")
-    with b3:
+
+    g1, g2 = st.columns(2)
+    with g1:
         render_card("🟢", "Holdings Gain / Loss", format_dollars(calc["holdings_gain_loss"]), "Market value minus invested basis")
-    with b4:
-        render_card("🎯", "Monthly Goal", format_dollars(GOAL_MONTHLY), f"Progress: {format_percent(calc['goal_progress'] * 100.0)}")
+    with g2:
+        st.empty()
 
 
 def render_top_controls(calc: dict) -> None:
@@ -927,14 +915,6 @@ def render_top_controls(calc: dict) -> None:
         "💰 Cash Command Center",
         "Use this area to match Fidelity cash, update total contributions, or add new money."
     )
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        render_card("💰", "Available Cash (FDRXX)", format_dollars(calc["available_cash"]), "Cash available for deployment")
-    with c2:
-        render_card("🧱", "Total Contributions", format_dollars(st.session_state.total_contributions), "Your total money added")
-    with c3:
-        render_card("📦", "Invested Cost Basis", format_dollars(calc["holdings_cost_basis"]), "Cost basis currently in holdings")
 
     st.markdown("#### Set Exact FDRXX Cash")
     with st.form("exact_cash_form"):

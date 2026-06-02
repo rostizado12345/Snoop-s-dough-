@@ -15,7 +15,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1-visual-polish-v4-all-premium-cards"
+APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1-visual-polish-v5-icons-colors-fixed"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -1101,24 +1101,44 @@ def inject_dashboard_css() -> None:
             position: absolute;
             left: 0;
             top: 0;
-            width: 0;
+            width: 7px;
             height: 100%;
         }
 
-        .premium-accent.blue { background: linear-gradient(180deg, #60a5fa, #2563eb); }
+        .premium-accent.blue { background: linear-gradient(180deg, #93c5fd, #2563eb); }
         .premium-accent.green { background: linear-gradient(180deg, #86efac, #16a34a); }
-        .premium-accent.purple { background: linear-gradient(180deg, #c4b5fd, #7c3aed); }
+        .premium-accent.purple { background: linear-gradient(180deg, #d8b4fe, #7c3aed); }
         .premium-accent.amber { background: linear-gradient(180deg, #fde68a, #d97706); }
         .premium-accent.gray { background: linear-gradient(180deg, #cbd5e1, #64748b); }
 
-        .metric-blue,
-        .metric-green,
-        .metric-purple,
-        .metric-amber,
+        .metric-blue {
+            background:
+                radial-gradient(circle at 88% 18%, rgba(147,197,253,0.38) 0%, rgba(147,197,253,0.09) 34%, transparent 54%),
+                linear-gradient(135deg, #020617 0%, #0f172a 42%, #1d4ed8 100%);
+        }
+
+        .metric-green {
+            background:
+                radial-gradient(circle at 88% 18%, rgba(134,239,172,0.40) 0%, rgba(134,239,172,0.10) 34%, transparent 54%),
+                linear-gradient(135deg, #022c22 0%, #064e3b 46%, #16a34a 100%);
+        }
+
+        .metric-purple {
+            background:
+                radial-gradient(circle at 88% 18%, rgba(216,180,254,0.40) 0%, rgba(216,180,254,0.10) 34%, transparent 54%),
+                linear-gradient(135deg, #1e1b4b 0%, #4c1d95 46%, #7c3aed 100%);
+        }
+
+        .metric-amber {
+            background:
+                radial-gradient(circle at 88% 18%, rgba(253,230,138,0.42) 0%, rgba(253,230,138,0.10) 34%, transparent 54%),
+                linear-gradient(135deg, #431407 0%, #78350f 46%, #d97706 100%);
+        }
+
         .metric-gray {
             background:
-                radial-gradient(circle at 88% 18%, rgba(96,165,250,0.36) 0%, rgba(96,165,250,0.08) 34%, transparent 54%),
-                linear-gradient(135deg, #020617 0%, #0f172a 46%, #1e3a8a 100%);
+                radial-gradient(circle at 88% 18%, rgba(203,213,225,0.34) 0%, rgba(203,213,225,0.08) 34%, transparent 54%),
+                linear-gradient(135deg, #020617 0%, #1e293b 46%, #475569 100%);
         }
 
         .premium-card-top {

@@ -15,7 +15,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1-visual-polish-v1"
+APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1-visual-polish-v2-icons-depth"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -848,8 +848,8 @@ def inject_dashboard_css() -> None:
             margin: 10px 0 14px 0;
             background: linear-gradient(135deg, #0f172a 0%, #172033 48%, #334155 100%);
             color: #ffffff !important;
-            box-shadow: 0 14px 34px rgba(15, 23, 42, 0.18);
-            border: 1px solid rgba(255,255,255,0.10);
+            box-shadow: 0 18px 42px rgba(15, 23, 42, 0.22);
+            border: 1px solid rgba(255,255,255,0.12);
         }
 
         .hero-card * {
@@ -894,12 +894,12 @@ def inject_dashboard_css() -> None:
         }
 
         .funding-card {
-            border-radius: 20px;
-            padding: 18px 22px 17px 22px;
+            border-radius: 22px;
+            padding: 19px 23px 18px 23px;
             margin: 0 0 20px 0;
             background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 54%, #e0f2fe 100%);
-            border: 1px solid rgba(99, 102, 241, 0.18);
-            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.07);
+            border: 1px solid rgba(99, 102, 241, 0.20);
+            box-shadow: 0 11px 26px rgba(15, 23, 42, 0.08);
         }
 
         .funding-topline {
@@ -935,7 +935,7 @@ def inject_dashboard_css() -> None:
             padding: 7px 12px;
             font-size: 0.86rem;
             font-weight: 850;
-            box-shadow: 0 4px 10px rgba(15,23,42,0.055);
+            box-shadow: 0 5px 12px rgba(15,23,42,0.07);
         }
 
         .funding-note {
@@ -962,12 +962,14 @@ def inject_dashboard_css() -> None:
 
         .metric-card {
             position: relative;
-            border-radius: 22px;
+            border-radius: 24px;
             padding: 19px 21px 18px 21px;
-            border: 1px solid rgba(148, 163, 184, 0.30);
-            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.065);
+            border: 1px solid rgba(148, 163, 184, 0.34);
+            box-shadow:
+                0 14px 30px rgba(15, 23, 42, 0.085),
+                inset 0 1px 0 rgba(255,255,255,0.75);
             margin-bottom: 14px;
-            min-height: 118px;
+            min-height: 132px;
             overflow: hidden;
         }
 
@@ -978,28 +980,63 @@ def inject_dashboard_css() -> None:
             left: 0;
             right: 0;
             height: 4px;
-            opacity: 0.8;
-            background: linear-gradient(90deg, rgba(15,23,42,0.28), rgba(15,23,42,0.06));
+            opacity: 0.9;
+            background: linear-gradient(90deg, rgba(15,23,42,0.30), rgba(15,23,42,0.05));
+        }
+
+        .metric-card:after {
+            content: "";
+            position: absolute;
+            width: 145px;
+            height: 145px;
+            right: -62px;
+            top: -62px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.50);
+            pointer-events: none;
         }
 
         .metric-blue {
-            background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+            background: linear-gradient(135deg, #f8fbff 0%, #eff6ff 44%, #dbeafe 100%);
         }
 
         .metric-purple {
-            background: linear-gradient(135deg, #faf5ff 0%, #ede9fe 100%);
+            background: linear-gradient(135deg, #fffbff 0%, #faf5ff 42%, #ede9fe 100%);
         }
 
         .metric-green {
-            background: linear-gradient(135deg, #ecfdf5 0%, #dcfce7 100%);
+            background: linear-gradient(135deg, #f7fffb 0%, #ecfdf5 42%, #dcfce7 100%);
         }
 
         .metric-amber {
-            background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+            background: linear-gradient(135deg, #fffdf5 0%, #fffbeb 42%, #fef3c7 100%);
         }
 
         .metric-gray {
-            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+            background: linear-gradient(135deg, #ffffff 0%, #f8fafc 45%, #e2e8f0 100%);
+        }
+
+        .metric-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+            position: relative;
+            z-index: 2;
+        }
+
+        .metric-icon {
+            width: 34px;
+            height: 34px;
+            min-width: 34px;
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255,255,255,0.72);
+            border: 1px solid rgba(148,163,184,0.30);
+            box-shadow: 0 6px 14px rgba(15,23,42,0.075);
+            font-size: 1.03rem;
         }
 
         .metric-label {
@@ -1017,6 +1054,8 @@ def inject_dashboard_css() -> None:
             font-weight: 900;
             line-height: 1.1;
             letter-spacing: -0.045em;
+            position: relative;
+            z-index: 2;
         }
 
         .metric-note {
@@ -1025,6 +1064,8 @@ def inject_dashboard_css() -> None:
             margin-top: 8px;
             line-height: 1.3;
             font-weight: 500;
+            position: relative;
+            z-index: 2;
         }
 
         .section-title {
@@ -1063,19 +1104,35 @@ def render_card(icon: str, label: str, value: str, note: str = "") -> None:
 
     if any(word in label_lower for word in ["cash", "fdrxx", "deploy"]):
         tone = "metric-green"
+        default_icon = "ðµ"
     elif any(word in label_lower for word in ["income", "goal", "conservative", "realistic"]):
         tone = "metric-purple"
+        default_icon = "ð"
     elif any(word in label_lower for word in ["gain", "profit", "loss"]):
         tone = "metric-amber"
-    elif any(word in label_lower for word in ["value", "basis", "contribution", "holdings"]):
+        default_icon = "âï¸"
+    elif any(word in label_lower for word in ["basis", "cost"]):
         tone = "metric-blue"
+        default_icon = "ð¯"
+    elif any(word in label_lower for word in ["holdings"]):
+        tone = "metric-blue"
+        default_icon = "ð"
+    elif any(word in label_lower for word in ["value", "contribution"]):
+        tone = "metric-blue"
+        default_icon = "ð¦"
     else:
         tone = "metric-gray"
+        default_icon = "â¢"
+
+    display_icon = icon or default_icon
 
     st.markdown(
         f"""
         <div class="metric-card {tone}">
-            <div class="metric-label">{label}</div>
+            <div class="metric-head">
+                <div class="metric-label">{label}</div>
+                <div class="metric-icon">{display_icon}</div>
+            </div>
             <div class="metric-value">{value}</div>
             <div class="metric-note">{note}</div>
         </div>
@@ -1176,7 +1233,7 @@ def render_paycheck_hero(calc: dict) -> None:
             <div class="hero-label">Regular Production App</div>
             <div class="hero-number">{format_dollars(realistic)} / {format_dollars(GOAL_MONTHLY)}</div>
             <div class="hero-small">
-                Realistic monthly income estimate • {format_percent(progress_pct)} of your goal
+                Realistic monthly income estimate â¢ {format_percent(progress_pct)} of your goal
             </div>
             <div class="paycheck-bar-wrap">
                 <div class="paycheck-bar-fill" style="width: {progress_pct:.1f}%;"></div>
@@ -1242,19 +1299,29 @@ def render_metrics(calc: dict) -> None:
         "Cash, total value, cost basis, and gains are separated clearly."
     )
 
+    total_value = float(calc["total_portfolio_value"])
+    holdings_value = float(calc["holdings_market_value"])
+    cash_value = float(calc["available_cash"])
+    holdings_basis = float(calc["holdings_cost_basis"])
+    holdings_gain_loss = float(calc["holdings_gain_loss"])
+
+    invested_pct = (holdings_value / total_value * 100.0) if total_value > 0 else 0.0
+    cash_pct = (cash_value / total_value * 100.0) if total_value > 0 else 0.0
+    gain_loss_pct = (holdings_gain_loss / holdings_basis * 100.0) if holdings_basis > 0 else 0.0
+
     m1, m2, m3 = st.columns(3)
     with m1:
-        render_card("", "Total Account Value", format_dollars(calc["total_portfolio_value"]), "Holdings + FDRXX cash")
+        render_card("ð¦", "Total Account Value", format_dollars(total_value), "Holdings + FDRXX cash")
     with m2:
-        render_card("", "Holdings Value", format_dollars(calc["holdings_market_value"]), "Income-producing holdings")
+        render_card("ð", "Holdings Value", format_dollars(holdings_value), f"{format_percent(invested_pct)} currently invested")
     with m3:
-        render_card("", "Cash Ready (FDRXX)", format_dollars(calc["available_cash"]), "Available dry powder")
+        render_card("ðµ", "Cash Ready (FDRXX)", format_dollars(cash_value), f"{format_percent(cash_pct)} available dry powder")
 
     b1, b2 = st.columns(2)
     with b1:
-        render_card("", "Invested Cost Basis", format_dollars(calc["holdings_cost_basis"]), "Cost basis currently in holdings")
+        render_card("ð¯", "Invested Cost Basis", format_dollars(holdings_basis), "Cost basis currently in holdings")
     with b2:
-        render_card("", "Holdings Gain / Loss", format_dollars(calc["holdings_gain_loss"]), "Market value minus invested basis")
+        render_card("âï¸", "Holdings Gain / Loss", format_dollars(holdings_gain_loss), f"{format_percent(gain_loss_pct)} return on invested basis")
 
 
 def render_top_controls(calc: dict) -> None:
@@ -1666,7 +1733,7 @@ def main() -> None:
 
     st.markdown('<div class="dashboard-title">Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="dashboard-subtitle">Regular production app • full-snapshot protection • stale-save rejection • restore recovery.</div>',
+        '<div class="dashboard-subtitle">Regular production app â¢ full-snapshot protection â¢ stale-save rejection â¢ restore recovery.</div>',
         unsafe_allow_html=True,
     )
 

@@ -15,7 +15,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1-visual-polish-v2-icons-depth"
+APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1-visual-polish-v2-icons-depth-fixed"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -34,9 +34,6 @@ LEGACY_STATE_FILE = APP_DIR / "retirement_dashboard_state.json"
 LEGACY_BACKUP_FILE = APP_DIR / "retirement_dashboard_state_backup.json"
 LEGACY_LAST_GOOD_FILE = APP_DIR / "retirement_dashboard_state_last_good.json"
 
-# Current protected baseline after the restored +$40,000 correction.
-# This is only the fallback floor for stale/legacy protection.
-# Future increases are protected dynamically inside the JSON file.
 DEFAULT_CASH_FDRXX = 93690.85
 DEFAULT_TOTAL_CONTRIBUTIONS = 436299.07
 CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS = 436299.07
@@ -1104,25 +1101,25 @@ def render_card(icon: str, label: str, value: str, note: str = "") -> None:
 
     if any(word in label_lower for word in ["cash", "fdrxx", "deploy"]):
         tone = "metric-green"
-        default_icon = "ðµ"
+        default_icon = "&#128181;"
     elif any(word in label_lower for word in ["income", "goal", "conservative", "realistic"]):
         tone = "metric-purple"
-        default_icon = "ð"
+        default_icon = "&#128200;"
     elif any(word in label_lower for word in ["gain", "profit", "loss"]):
         tone = "metric-amber"
-        default_icon = "âï¸"
+        default_icon = "&#8599;"
     elif any(word in label_lower for word in ["basis", "cost"]):
         tone = "metric-blue"
-        default_icon = "ð¯"
+        default_icon = "&#127919;"
     elif any(word in label_lower for word in ["holdings"]):
         tone = "metric-blue"
-        default_icon = "ð"
+        default_icon = "&#128202;"
     elif any(word in label_lower for word in ["value", "contribution"]):
         tone = "metric-blue"
-        default_icon = "ð¦"
+        default_icon = "&#127974;"
     else:
         tone = "metric-gray"
-        default_icon = "â¢"
+        default_icon = "&#8226;"
 
     display_icon = icon or default_icon
 
@@ -1233,7 +1230,7 @@ def render_paycheck_hero(calc: dict) -> None:
             <div class="hero-label">Regular Production App</div>
             <div class="hero-number">{format_dollars(realistic)} / {format_dollars(GOAL_MONTHLY)}</div>
             <div class="hero-small">
-                Realistic monthly income estimate â¢ {format_percent(progress_pct)} of your goal
+                Realistic monthly income estimate &#8226; {format_percent(progress_pct)} of your goal
             </div>
             <div class="paycheck-bar-wrap">
                 <div class="paycheck-bar-fill" style="width: {progress_pct:.1f}%;"></div>
@@ -1311,17 +1308,17 @@ def render_metrics(calc: dict) -> None:
 
     m1, m2, m3 = st.columns(3)
     with m1:
-        render_card("ð¦", "Total Account Value", format_dollars(total_value), "Holdings + FDRXX cash")
+        render_card("&#127974;", "Total Account Value", format_dollars(total_value), "Holdings + FDRXX cash")
     with m2:
-        render_card("ð", "Holdings Value", format_dollars(holdings_value), f"{format_percent(invested_pct)} currently invested")
+        render_card("&#128202;", "Holdings Value", format_dollars(holdings_value), f"{format_percent(invested_pct)} currently invested")
     with m3:
-        render_card("ðµ", "Cash Ready (FDRXX)", format_dollars(cash_value), f"{format_percent(cash_pct)} available dry powder")
+        render_card("&#128181;", "Cash Ready (FDRXX)", format_dollars(cash_value), f"{format_percent(cash_pct)} available dry powder")
 
     b1, b2 = st.columns(2)
     with b1:
-        render_card("ð¯", "Invested Cost Basis", format_dollars(holdings_basis), "Cost basis currently in holdings")
+        render_card("&#127919;", "Invested Cost Basis", format_dollars(holdings_basis), "Cost basis currently in holdings")
     with b2:
-        render_card("âï¸", "Holdings Gain / Loss", format_dollars(holdings_gain_loss), f"{format_percent(gain_loss_pct)} return on invested basis")
+        render_card("&#8599;", "Holdings Gain / Loss", format_dollars(holdings_gain_loss), f"{format_percent(gain_loss_pct)} return on invested basis")
 
 
 def render_top_controls(calc: dict) -> None:
@@ -1733,7 +1730,7 @@ def main() -> None:
 
     st.markdown('<div class="dashboard-title">Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="dashboard-subtitle">Regular production app â¢ full-snapshot protection â¢ stale-save rejection â¢ restore recovery.</div>',
+        '<div class="dashboard-subtitle">Regular production app &#8226; full-snapshot protection &#8226; stale-save rejection &#8226; restore recovery.</div>',
         unsafe_allow_html=True,
     )
 

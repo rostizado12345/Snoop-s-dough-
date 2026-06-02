@@ -15,7 +15,8 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵", layout="wide")
 
-APP_BASELINE_VERSION = "2026-05-15-revert-proof-loader-v4"
+APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5"
+STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
 REALISTIC_INCOME_FACTOR = 0.843
@@ -33,9 +34,12 @@ LEGACY_STATE_FILE = APP_DIR / "retirement_dashboard_state.json"
 LEGACY_BACKUP_FILE = APP_DIR / "retirement_dashboard_state_backup.json"
 LEGACY_LAST_GOOD_FILE = APP_DIR / "retirement_dashboard_state_last_good.json"
 
-DEFAULT_CASH_FDRXX = 53690.85
-DEFAULT_TOTAL_CONTRIBUTIONS = 396299.07
-EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K = 396299.07
+# Current protected baseline after the restored +$40,000 correction.
+# This is only the fallback floor for stale/legacy protection.
+# Future increases are protected dynamically inside the JSON file.
+DEFAULT_CASH_FDRXX = 93690.85
+DEFAULT_TOTAL_CONTRIBUTIONS = 436299.07
+CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS = 436299.07
 
 DEFAULT_COLUMNS = [
     "ticker", "qty", "avg_cost", "manual_price", "target_weight",
@@ -136,15 +140,17 @@ def get_default_portfolio_df() -> pd.DataFrame:
 def baseline_state_payload() -> dict:
     now = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
     return {
+        "state_schema_version": STATE_SCHEMA_VERSION,
         "app_baseline_version": APP_BASELINE_VERSION,
         "portfolio_df": get_default_portfolio_df(),
         "cash_fdrxx": DEFAULT_CASH_FDRXX,
         "total_contributions": DEFAULT_TOTAL_CONTRIBUTIONS,
+        "protected_min_contributions": DEFAULT_TOTAL_CONTRIBUTIONS,
         "use_live_prices": True,
         "auto_sync_prices": True,
         "last_price_sync": "",
         "last_saved": now,
-        "last_deploy_message": "Loaded protected post-$30,000 Fidelity production baseline.",
+        "last_deploy_message": "Loaded current protected full-snapshot production baseline.",
         "last_cash_message": f"FDRXX cash baseline: {format_dollars(DEFAULT_CASH_FDRXX)}.",
     }
 
@@ -153,11 +159,23 @@ def normalize_state_payload(raw: dict) -> dict:
     records = raw.get("portfolio_df", raw.get("portfolio", []))
     portfolio_df = normalize_portfolio_df(pd.DataFrame(records)) if records else get_default_portfolio_df()
 
+    schema_version = int(to_float(raw.get("state_schema_version", 1), 1))
+    total_contributions = round_money(
+        to_float(raw.get("total_contributions", DEFAULT_TOTAL_CONTRIBUTIONS), DEFAULT_TOTAL_CONTRIBUTIONS)
+    )
+
+    if "protected_min_contributions" in raw:
+        protected_min = round_money(to_float(raw.get("protected_min_contributions"), total_contributions))
+    else:
+        protected_min = total_contributions
+
     return {
+        "state_schema_version": schema_version,
         "app_baseline_version": raw.get("app_baseline_version", ""),
         "portfolio_df": portfolio_df,
         "cash_fdrxx": round_money(to_float(raw.get("cash_fdrxx", raw.get("cash", DEFAULT_CASH_FDRXX)), DEFAULT_CASH_FDRXX)),
-        "total_contributions": round_money(to_float(raw.get("total_contributions", DEFAULT_TOTAL_CONTRIBUTIONS), DEFAULT_TOTAL_CONTRIBUTIONS)),
+        "total_contributions": total_contributions,
+        "protected_min_contributions": protected_min,
         "use_live_prices": bool(raw.get("use_live_prices", True)),
         "auto_sync_prices": bool(raw.get("auto_sync_prices", True)),
         "last_price_sync": str(raw.get("last_price_sync", "")),
@@ -197,11 +215,21 @@ def make_payload_from_state(state: dict, force_timestamp: bool = False) -> dict:
     if force_timestamp or saved_time.strip() == "":
         saved_time = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
 
+    total_contributions = round_money(state["total_contributions"])
+    protected_min = round_money(
+        state.get(
+            "protected_min_contributions",
+            max(total_contributions, CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS),
+        )
+    )
+
     return {
+        "state_schema_version": STATE_SCHEMA_VERSION,
         "app_baseline_version": APP_BASELINE_VERSION,
         "portfolio_df": df.to_dict(orient="records"),
         "cash_fdrxx": round_money(state["cash_fdrxx"]),
-        "total_contributions": round_money(state["total_contributions"]),
+        "total_contributions": total_contributions,
+        "protected_min_contributions": protected_min,
         "use_live_prices": bool(state.get("use_live_prices", True)),
         "auto_sync_prices": bool(state.get("auto_sync_prices", True)),
         "last_price_sync": str(state.get("last_price_sync", "")),
@@ -211,28 +239,40 @@ def make_payload_from_state(state: dict, force_timestamp: bool = False) -> dict:
     }
 
 
-def state_score(item: dict) -> tuple:
+def candidate_sort_key(item: dict) -> tuple:
     return (
-        round_money(item["total_contributions"]),
-        round_money(item["cash_fdrxx"]),
+        1 if item["state"].get("state_schema_version", 1) >= STATE_SCHEMA_VERSION else 0,
         item["last_saved_dt"],
+        round_money(item["state"].get("total_contributions", 0.0)),
     )
+
+
+def is_candidate_valid(item: dict) -> bool:
+    state = item["state"]
+    schema_version = int(state.get("state_schema_version", 1))
+    total = round_money(state.get("total_contributions", 0.0))
+    protected_min = round_money(state.get("protected_min_contributions", total))
+
+    if schema_version < STATE_SCHEMA_VERSION:
+        return total >= CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS
+
+    return total >= protected_min
 
 
 def write_payload_everywhere(payload: dict) -> None:
     write_json_atomic(STATE_FILE, payload)
     write_json_atomic(BACKUP_FILE, payload)
+    write_json_atomic(LAST_GOOD_FILE, payload)
+
     write_json_atomic(LEGACY_STATE_FILE, payload)
     write_json_atomic(LEGACY_BACKUP_FILE, payload)
-
-    if round_money(payload.get("total_contributions", 0.0)) >= EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K:
-        write_json_atomic(LAST_GOOD_FILE, payload)
-        write_json_atomic(LEGACY_LAST_GOOD_FILE, payload)
+    write_json_atomic(LEGACY_LAST_GOOD_FILE, payload)
 
 
 def load_state() -> dict:
     errors = []
     candidates = []
+    rejected = []
 
     for path in candidate_state_files():
         if not path.exists():
@@ -241,32 +281,50 @@ def load_state() -> dict:
         try:
             raw = read_json_file(path)
             loaded = normalize_state_payload(raw)
-            candidates.append(
-                {
-                    "path": path,
-                    "state": loaded,
-                    "last_saved_dt": parse_saved_time(loaded.get("last_saved", "")),
-                    "total_contributions": round_money(loaded.get("total_contributions", 0.0)),
-                    "cash_fdrxx": round_money(loaded.get("cash_fdrxx", 0.0)),
-                }
-            )
+            item = {
+                "path": path,
+                "state": loaded,
+                "last_saved_dt": parse_saved_time(loaded.get("last_saved", "")),
+            }
+
+            if is_candidate_valid(item):
+                candidates.append(item)
+            else:
+                rejected.append(
+                    f"{path} | rejected stale/unsafe | contributions {format_dollars(loaded.get('total_contributions', 0.0))} | "
+                    f"protected floor {format_dollars(loaded.get('protected_min_contributions', 0.0))} | "
+                    f"schema {loaded.get('state_schema_version', 1)} | saved {loaded.get('last_saved', '') or 'unknown'}"
+                )
         except Exception as exc:
             errors.append(f"{path}: {exc}")
 
     if candidates:
-        best = sorted(candidates, key=state_score, reverse=True)[0]
+        best = sorted(candidates, key=candidate_sort_key, reverse=True)[0]
         loaded = best["state"]
-        payload = make_payload_from_state(loaded, force_timestamp=True)
 
+        if int(loaded.get("state_schema_version", 1)) < STATE_SCHEMA_VERSION:
+            loaded["protected_min_contributions"] = max(
+                round_money(loaded.get("total_contributions", 0.0)),
+                CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS,
+            )
+
+        payload = make_payload_from_state(loaded, force_timestamp=True)
         loaded["app_baseline_version"] = APP_BASELINE_VERSION
-        loaded["_loaded_from"] = f"BEST SAVED FILE SELECTED: {best['path']}"
+        loaded["state_schema_version"] = STATE_SCHEMA_VERSION
+        loaded["protected_min_contributions"] = payload["protected_min_contributions"]
+        loaded["_loaded_from"] = f"BEST VALID FULL SNAPSHOT SELECTED: {best['path']}"
         loaded["_version_mismatch_fixed"] = True
         loaded["_active_state_file"] = str(STATE_FILE)
         loaded["_load_errors"] = errors
         loaded["_candidate_summary"] = [
-            f"{c['path']} | contributions {format_dollars(c['total_contributions'])} | cash {format_dollars(c['cash_fdrxx'])} | saved {c['state'].get('last_saved', '') or 'unknown'}"
+            f"{c['path']} | schema {c['state'].get('state_schema_version', 1)} | "
+            f"contributions {format_dollars(c['state'].get('total_contributions', 0.0))} | "
+            f"protected floor {format_dollars(c['state'].get('protected_min_contributions', 0.0))} | "
+            f"cash {format_dollars(c['state'].get('cash_fdrxx', 0.0))} | "
+            f"saved {c['state'].get('last_saved', '') or 'unknown'}"
             for c in candidates
         ]
+        loaded["_rejected_summary"] = rejected
 
         write_payload_everywhere(payload)
 
@@ -277,22 +335,33 @@ def load_state() -> dict:
     payload = make_payload_from_state(state, force_timestamp=True)
     write_payload_everywhere(payload)
 
-    state["_loaded_from"] = "PROTECTED POST-$30K BASELINE - no readable saved or backup file found"
+    state["_loaded_from"] = "CURRENT PROTECTED FULL-SNAPSHOT BASELINE - no valid saved file found"
     state["_version_mismatch_fixed"] = False
     state["_active_state_file"] = str(STATE_FILE)
     state["_load_errors"] = errors
     state["_candidate_summary"] = []
+    state["_rejected_summary"] = rejected
     state["last_saved"] = payload["last_saved"]
     return state
 
 
 def make_state_payload() -> dict:
     df = normalize_portfolio_df(st.session_state.portfolio_df.copy())
+    total_contributions = round_money(st.session_state.total_contributions)
+    protected_min = round_money(
+        st.session_state.get(
+            "protected_min_contributions",
+            max(total_contributions, CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS),
+        )
+    )
+
     return {
+        "state_schema_version": STATE_SCHEMA_VERSION,
         "app_baseline_version": APP_BASELINE_VERSION,
         "portfolio_df": df.to_dict(orient="records"),
         "cash_fdrxx": round_money(st.session_state.cash_fdrxx),
-        "total_contributions": round_money(st.session_state.total_contributions),
+        "total_contributions": total_contributions,
+        "protected_min_contributions": protected_min,
         "use_live_prices": bool(st.session_state.use_live_prices),
         "auto_sync_prices": bool(st.session_state.auto_sync_prices),
         "last_price_sync": str(st.session_state.last_price_sync),
@@ -302,29 +371,43 @@ def make_state_payload() -> dict:
     }
 
 
+def get_existing_protected_floor() -> float:
+    floors = [CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS]
+
+    for path in candidate_state_files():
+        if not path.exists():
+            continue
+        try:
+            existing_norm = normalize_state_payload(read_json_file(path))
+            floors.append(round_money(existing_norm.get("protected_min_contributions", existing_norm.get("total_contributions", 0.0))))
+            floors.append(round_money(existing_norm.get("total_contributions", 0.0)))
+        except Exception:
+            pass
+
+    floors.append(round_money(st.session_state.get("protected_min_contributions", CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS)))
+    return round_money(max(floors))
+
+
 def save_state() -> bool:
     try:
         payload = make_state_payload()
 
-        existing_candidates = []
-        for path in candidate_state_files():
-            if not path.exists():
-                continue
-            try:
-                existing_norm = normalize_state_payload(read_json_file(path))
-                existing_candidates.append(existing_norm)
-            except Exception:
-                pass
+        existing_floor = get_existing_protected_floor()
+        current_total = round_money(payload["total_contributions"])
+        authorized_reduction = bool(st.session_state.get("authorize_contribution_reduction_once", False))
 
-        for existing_norm in existing_candidates:
-            if (
-                round_money(payload["total_contributions"]) < round_money(existing_norm["total_contributions"])
-                and round_money(existing_norm["total_contributions"]) >= EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K
-            ):
-                raise RuntimeError(
-                    "Protected save blocked: current screen has lower contributions than an existing saved file. "
-                    "Use Reload Best Saved File or restore the latest snapshot before saving."
-                )
+        if current_total < existing_floor and not authorized_reduction:
+            raise RuntimeError(
+                f"Protected save blocked: current Total Contributions {format_dollars(current_total)} "
+                f"is below the protected floor {format_dollars(existing_floor)}. "
+                f"Use the authorized reduction checkbox only if you intentionally removed contribution money."
+            )
+
+        if authorized_reduction:
+            payload["protected_min_contributions"] = current_total
+            st.session_state.authorize_contribution_reduction_once = False
+        else:
+            payload["protected_min_contributions"] = round_money(max(existing_floor, current_total))
 
         write_payload_everywhere(payload)
 
@@ -333,9 +416,12 @@ def save_state() -> bool:
             raise RuntimeError("Save verification failed: cash did not match after write.")
         if round_money(verify.get("total_contributions", -1)) != round_money(payload["total_contributions"]):
             raise RuntimeError("Save verification failed: contributions did not match after write.")
+        if round_money(verify.get("protected_min_contributions", -1)) != round_money(payload["protected_min_contributions"]):
+            raise RuntimeError("Save verification failed: protected floor did not match after write.")
 
+        st.session_state.protected_min_contributions = payload["protected_min_contributions"]
         st.session_state.last_saved = payload["last_saved"]
-        st.session_state.loaded_from = f"CURRENT SESSION - saved successfully to {STATE_FILE} and root backup files"
+        st.session_state.loaded_from = f"CURRENT FULL SNAPSHOT - saved successfully to all state and backup files"
         st.session_state.last_save_error = ""
         return True
 
@@ -358,6 +444,9 @@ def apply_state_dict(state: dict, message: str = "") -> None:
     st.session_state.editor_df = normalize_portfolio_df(state["portfolio_df"].copy())
     st.session_state.cash_fdrxx = round_money(state["cash_fdrxx"])
     st.session_state.total_contributions = round_money(state["total_contributions"])
+    st.session_state.protected_min_contributions = round_money(
+        state.get("protected_min_contributions", max(st.session_state.total_contributions, CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS))
+    )
     st.session_state.use_live_prices = bool(state.get("use_live_prices", True))
     st.session_state.auto_sync_prices = bool(state.get("auto_sync_prices", True))
     st.session_state.last_price_sync = state.get("last_price_sync", "")
@@ -369,10 +458,12 @@ def apply_state_dict(state: dict, message: str = "") -> None:
 
 def build_session_start_payload_from_loaded_state() -> dict:
     return {
+        "state_schema_version": STATE_SCHEMA_VERSION,
         "app_baseline_version": APP_BASELINE_VERSION,
         "portfolio_df": normalize_portfolio_df(st.session_state.portfolio_df).to_dict(orient="records"),
         "cash_fdrxx": round_money(st.session_state.cash_fdrxx),
         "total_contributions": round_money(st.session_state.total_contributions),
+        "protected_min_contributions": round_money(st.session_state.protected_min_contributions),
         "use_live_prices": bool(st.session_state.use_live_prices),
         "auto_sync_prices": bool(st.session_state.auto_sync_prices),
         "last_price_sync": str(st.session_state.last_price_sync),
@@ -392,6 +483,9 @@ def init_state() -> None:
     st.session_state.editor_df = normalize_portfolio_df(loaded["portfolio_df"].copy())
     st.session_state.cash_fdrxx = round_money(loaded["cash_fdrxx"])
     st.session_state.total_contributions = round_money(loaded["total_contributions"])
+    st.session_state.protected_min_contributions = round_money(
+        loaded.get("protected_min_contributions", max(st.session_state.total_contributions, CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS))
+    )
     st.session_state.use_live_prices = bool(loaded.get("use_live_prices", True))
     st.session_state.auto_sync_prices = bool(loaded.get("auto_sync_prices", True))
     st.session_state.last_price_sync = loaded.get("last_price_sync", "")
@@ -399,6 +493,7 @@ def init_state() -> None:
     st.session_state.last_deploy_message = loaded.get("last_deploy_message", "")
     st.session_state.last_cash_message = loaded.get("last_cash_message", "")
     st.session_state.last_save_error = ""
+    st.session_state.authorize_contribution_reduction_once = False
     st.session_state.editor_version = 0
     st.session_state.app_initialized = True
 
@@ -407,6 +502,7 @@ def init_state() -> None:
     st.session_state.active_state_file = str(STATE_FILE)
     st.session_state.load_errors = loaded.get("_load_errors", [])
     st.session_state.candidate_summary = loaded.get("_candidate_summary", [])
+    st.session_state.rejected_summary = loaded.get("_rejected_summary", [])
     st.session_state.session_start_payload = build_session_start_payload_from_loaded_state()
 
 
@@ -575,6 +671,9 @@ def add_new_money(amount: float) -> None:
 
     st.session_state.cash_fdrxx = round_money(st.session_state.cash_fdrxx + amount)
     st.session_state.total_contributions = round_money(st.session_state.total_contributions + amount)
+    st.session_state.protected_min_contributions = round_money(
+        max(st.session_state.protected_min_contributions, st.session_state.total_contributions)
+    )
     st.session_state.last_cash_message = f"Added new money: {format_dollars(amount)} to FDRXX."
     save_state()
 
@@ -797,6 +896,7 @@ def render_state_health_box() -> None:
     loaded_from = st.session_state.get("loaded_from", "UNKNOWN")
     cash = st.session_state.get("cash_fdrxx", 0.0)
     contributions = st.session_state.get("total_contributions", 0.0)
+    protected_floor = st.session_state.get("protected_min_contributions", 0.0)
     last_saved = st.session_state.get("last_saved", "") or "not saved yet"
 
     state_exists = STATE_FILE.exists()
@@ -806,16 +906,17 @@ def render_state_health_box() -> None:
     legacy_backup_exists = LEGACY_BACKUP_FILE.exists()
 
     good_loader = (
-        "BEST SAVED FILE" in loaded_from
-        or "CURRENT SESSION" in loaded_from
+        "BEST VALID FULL SNAPSHOT" in loaded_from
+        or "CURRENT FULL SNAPSHOT" in loaded_from
         or "UPLOADED SNAPSHOT" in loaded_from
-        or "PROTECTED POST-$30K" in loaded_from
+        or "CURRENT PROTECTED FULL-SNAPSHOT BASELINE" in loaded_from
     )
 
     message = (
         f"State loaded from: {loaded_from}\n\n"
         f"Cash: {format_dollars(cash)} | "
         f"Contributions: {format_dollars(contributions)} | "
+        f"Protected floor: {format_dollars(protected_floor)} | "
         f"Last saved: {last_saved}"
     )
 
@@ -824,16 +925,16 @@ def render_state_health_box() -> None:
     else:
         st.error(message)
 
-    if round_money(contributions) < EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K:
+    if round_money(contributions) < round_money(protected_floor):
         st.error(
-            f"🚨 Contributions are below the expected post-$30,000 number. "
-            f"Loaded: {format_dollars(contributions)} | Expected around: {format_dollars(EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K)}. "
-            f"Restore yesterday's snapshot before making new saves."
+            f"🚨 Contributions are below the protected floor. "
+            f"Loaded: {format_dollars(contributions)} | Protected floor: {format_dollars(protected_floor)}. "
+            f"Do not save unless this was an intentional contribution reduction."
         )
     else:
         st.info(
-            f"✅ Contribution check passed: {format_dollars(contributions)} "
-            f"is at or above the expected post-$30,000 level."
+            f"✅ Full-snapshot protection passed: contributions {format_dollars(contributions)} "
+            f"are at or above the protected floor {format_dollars(protected_floor)}."
         )
 
     st.caption(f"Active save file: {STATE_FILE}")
@@ -843,11 +944,16 @@ def render_state_health_box() -> None:
     )
 
     if st.session_state.get("version_mismatch_fixed", False):
-        st.info("Smart loader checked all saved files and copied the strongest available state into every backup location.")
+        st.info("Smart loader copied the best valid full snapshot into every save and backup location.")
 
     if st.session_state.get("candidate_summary"):
-        with st.expander("Saved files checked by smart loader"):
+        with st.expander("Valid full snapshots checked by smart loader"):
             for item in st.session_state.candidate_summary:
+                st.write(item)
+
+    if st.session_state.get("rejected_summary"):
+        with st.expander("Rejected stale or unsafe saved files"):
+            for item in st.session_state.rejected_summary:
                 st.write(item)
 
     if st.session_state.get("load_errors"):
@@ -937,18 +1043,34 @@ def render_top_controls(calc: dict) -> None:
 
     st.markdown("#### Total Contributions")
     with st.form("contribution_form"):
+        current_floor = round_money(st.session_state.get("protected_min_contributions", CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS))
+
         new_total = st.number_input(
             "Total Contributions",
             min_value=0.0,
             value=float(st.session_state.total_contributions),
             step=1000.0,
             format="%.2f",
-            help="Deploying cash does NOT change this.",
+            help="Deploying cash does NOT change this. Lowering this below the protected floor requires authorization.",
         )
+
+        authorize_reduction = False
+        if round_money(new_total) < current_floor:
+            st.warning(
+                f"You are lowering Total Contributions below the protected floor of {format_dollars(current_floor)}. "
+                "Only do this if money was actually removed from the account/contribution base."
+            )
+            authorize_reduction = st.checkbox(
+                "Authorize this intentional contribution reduction and reset the protected floor.",
+                value=False,
+            )
+
         saved = st.form_submit_button("Save Total Contributions", use_container_width=True)
 
     if saved:
         st.session_state.total_contributions = round_money(new_total)
+        st.session_state.authorize_contribution_reduction_once = bool(authorize_reduction)
+
         if save_state():
             st.success("Total contributions saved.")
         else:
@@ -1044,7 +1166,7 @@ def render_holdings_editor() -> None:
         sync_editor_from_portfolio()
 
         if ok:
-            st.success("Holdings saved permanently.")
+            st.success("Holdings saved permanently as part of the full protected snapshot.")
         else:
             st.error(f"Could not save holdings. Error: {st.session_state.last_save_error}")
 
@@ -1148,7 +1270,7 @@ def render_system_tools() -> None:
         "Backup, restore, reload, and safety tools."
     )
 
-    st.warning("Use Download Snapshot Backup before big changes. Do not overwrite your known-good backup with stale data.")
+    st.warning("Use Download Snapshot Backup before big changes. Old 396k/53k files should now be rejected as stale.")
 
     c1, c2, c3 = st.columns(3)
 
@@ -1157,26 +1279,35 @@ def render_system_tools() -> None:
             try:
                 raw = st.session_state.get("session_start_payload", {})
                 state = normalize_state_payload(raw)
-                apply_state_dict(state, "Reversed this session back to the state from when the app opened.")
-                save_state()
-                st.success("Session reversed.")
-                st.rerun()
+                current_floor = round_money(st.session_state.get("protected_min_contributions", CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS))
+
+                if round_money(state.get("total_contributions", 0.0)) < current_floor:
+                    st.error(
+                        f"Reverse blocked because the session-start snapshot is below the protected floor "
+                        f"of {format_dollars(current_floor)}."
+                    )
+                else:
+                    apply_state_dict(state, "Reversed this session back to the state from when the app opened.")
+                    save_state()
+                    st.success("Session reversed.")
+                    st.rerun()
             except Exception as exc:
                 st.error(f"Could not reverse session: {exc}")
 
     with c2:
         if st.button("Reload Best Saved File", use_container_width=True):
             loaded = load_state()
-            apply_state_dict(loaded, "Reloaded from best available saved JSON file.")
+            apply_state_dict(loaded, "Reloaded from best valid full snapshot.")
             st.session_state.loaded_from = loaded.get("_loaded_from", "UNKNOWN")
             st.session_state.version_mismatch_fixed = bool(loaded.get("_version_mismatch_fixed", False))
             st.session_state.candidate_summary = loaded.get("_candidate_summary", [])
+            st.session_state.rejected_summary = loaded.get("_rejected_summary", [])
             st.rerun()
 
     with c3:
         if st.button("Force Save State Now", use_container_width=True):
             if save_state():
-                st.success("Saved and verified current dashboard state.")
+                st.success("Saved and verified current full dashboard snapshot.")
             else:
                 st.error(f"Save failed: {st.session_state.last_save_error}")
 
@@ -1206,25 +1337,44 @@ def render_system_tools() -> None:
         try:
             uploaded_raw = json.loads(uploaded_file.getvalue().decode("utf-8"))
             uploaded_state = normalize_state_payload(uploaded_raw)
+            current_floor = round_money(st.session_state.get("protected_min_contributions", CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS))
+            uploaded_total = round_money(uploaded_state["total_contributions"])
 
             st.info(
                 "Uploaded snapshot ready: "
                 f"Cash {format_dollars(uploaded_state['cash_fdrxx'])}, "
-                f"Total Contributions {format_dollars(uploaded_state['total_contributions'])}."
+                f"Total Contributions {format_dollars(uploaded_total)}, "
+                f"Protected Floor {format_dollars(uploaded_state.get('protected_min_contributions', uploaded_total))}."
             )
 
-            if uploaded_state["total_contributions"] < EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K:
-                st.error(
-                    "This uploaded backup appears to be older than the $30,000 contribution update. "
-                    "Only restore it if you are sure this is the file you want."
-                )
+            restore_allowed = True
+            authorize_lower_restore = False
 
-            if st.button("Restore Uploaded Snapshot And Make It Active", use_container_width=True):
+            if uploaded_total < current_floor:
+                restore_allowed = False
+                st.error(
+                    f"This uploaded backup is below the current protected floor of {format_dollars(current_floor)}. "
+                    "Restore is blocked unless you authorize it as an intentional contribution reduction."
+                )
+                authorize_lower_restore = st.checkbox(
+                    "Authorize restoring this lower contribution snapshot and reset the protected floor.",
+                    value=False,
+                )
+                restore_allowed = bool(authorize_lower_restore)
+
+            if st.button("Restore Uploaded Snapshot And Make It Active", use_container_width=True, disabled=not restore_allowed):
+                if authorize_lower_restore:
+                    uploaded_state["protected_min_contributions"] = uploaded_total
+                    st.session_state.authorize_contribution_reduction_once = True
+                else:
+                    uploaded_state["protected_min_contributions"] = max(uploaded_total, current_floor)
+
                 apply_state_dict(uploaded_state, "Restored from uploaded snapshot backup.")
                 st.session_state.loaded_from = "UPLOADED SNAPSHOT - restored and made active"
                 payload_to_save = make_payload_from_state(uploaded_state, force_timestamp=True)
                 write_payload_everywhere(payload_to_save)
                 st.session_state.last_saved = payload_to_save.get("last_saved", "")
+                st.session_state.protected_min_contributions = payload_to_save.get("protected_min_contributions", uploaded_total)
                 save_state()
                 st.success("Uploaded snapshot restored, saved, backed up in all locations, and made active.")
                 st.rerun()
@@ -1234,6 +1384,7 @@ def render_system_tools() -> None:
 
     st.markdown("#### Save Diagnostics")
     st.caption(f"App version: {APP_BASELINE_VERSION}")
+    st.caption(f"State schema version: {STATE_SCHEMA_VERSION}")
     st.caption(f"Current working directory: {Path.cwd()}")
     st.caption(f"App directory: {APP_DIR}")
     st.caption(f"Hidden active state file: {STATE_FILE}")
@@ -1250,19 +1401,20 @@ def render_system_tools() -> None:
     st.caption(f"Root last-good exists: {LEGACY_LAST_GOOD_FILE.exists()}")
     st.caption(f"Last saved: {st.session_state.get('last_saved', 'not yet') or 'not yet'}")
     st.caption(f"Loaded from: {st.session_state.get('loaded_from', 'UNKNOWN')}")
+    st.caption(f"Protected floor: {format_dollars(st.session_state.get('protected_min_contributions', 0.0))}")
 
     if st.session_state.get("last_save_error"):
         st.error(f"Last save error: {st.session_state.last_save_error}")
 
     st.markdown("#### Dangerous Reset")
 
-    with st.expander("Reset to Protected Post-$30K Production Baseline"):
-        st.error("Only use this if you want to wipe current numbers back to the protected post-$30K baseline.")
-        confirm_reset = st.checkbox("I understand this will reset to the protected post-$30K production baseline.")
+    with st.expander("Reset to Current Protected Full-Snapshot Baseline"):
+        st.error("Only use this if you want to wipe current numbers back to the current protected baseline.")
+        confirm_reset = st.checkbox("I understand this will reset to the current protected full-snapshot baseline.")
         if st.button("Reset to Protected Baseline", use_container_width=True, disabled=not confirm_reset):
             baseline = baseline_state_payload()
-            apply_state_dict(baseline, "Reset to protected post-$30K production baseline complete.")
-            st.session_state.loaded_from = "PROTECTED POST-$30K BASELINE - manual reset"
+            apply_state_dict(baseline, "Reset to current protected full-snapshot baseline complete.")
+            st.session_state.loaded_from = "CURRENT PROTECTED FULL-SNAPSHOT BASELINE - manual reset"
             save_state()
             st.rerun()
 
@@ -1273,7 +1425,7 @@ def main() -> None:
 
     st.markdown('<div class="dashboard-title">💵 Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="dashboard-subtitle">Regular production app • revert-proof loader • stale-save protection • restore recovery.</div>',
+        '<div class="dashboard-subtitle">Regular production app • full-snapshot protection • stale-save rejection • restore recovery.</div>',
         unsafe_allow_html=True,
     )
 

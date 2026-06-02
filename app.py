@@ -13,9 +13,9 @@ except Exception:
     yf = None
 
 
-st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵", layout="wide")
+st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1"
+APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1-visual-polish-v1"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -815,59 +815,242 @@ def inject_dashboard_css() -> None:
     st.markdown(
         """
         <style>
-        .main .block-container { padding-top: 1.05rem; padding-bottom: 2rem; max-width: 1420px; }
-        .dashboard-title { font-size: 2.35rem; font-weight: 950; margin-bottom: 0.1rem; color: #0f172a; letter-spacing: -0.03em; }
-        .dashboard-subtitle { color: #64748b; font-size: 1.04rem; margin-bottom: 1.0rem; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+
+        html, body, [class*="css"], .stApp {
+            font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+
+        .main .block-container {
+            padding-top: 1.05rem;
+            padding-bottom: 2rem;
+            max-width: 1420px;
+        }
+
+        .dashboard-title {
+            font-size: 2.25rem;
+            font-weight: 900;
+            margin-bottom: 0.1rem;
+            color: #0f172a;
+            letter-spacing: -0.04em;
+        }
+
+        .dashboard-subtitle {
+            color: #64748b;
+            font-size: 1.02rem;
+            margin-bottom: 1.0rem;
+            font-weight: 500;
+        }
+
         .hero-card {
-            border-radius: 26px; padding: 28px 30px; margin: 10px 0 14px 0;
+            border-radius: 26px;
+            padding: 28px 30px;
+            margin: 10px 0 14px 0;
             background: linear-gradient(135deg, #0f172a 0%, #172033 48%, #334155 100%);
-            color: #ffffff !important; box-shadow: 0 18px 40px rgba(15, 23, 42, 0.25);
+            color: #ffffff !important;
+            box-shadow: 0 14px 34px rgba(15, 23, 42, 0.18);
             border: 1px solid rgba(255,255,255,0.10);
         }
-        .hero-card * { color: #ffffff !important; }
-        .hero-label { font-size: 0.92rem; letter-spacing: 0.10em; text-transform: uppercase; opacity: 0.84; margin-bottom: 4px; font-weight: 850; }
-        .hero-number { font-size: 2.95rem; font-weight: 950; margin: 2px 0 2px 0; letter-spacing: -0.045em; }
-        .hero-small { opacity: 0.94; font-size: 1.04rem; margin-top: 5px; }
-        .paycheck-bar-wrap { margin-top: 18px; background: rgba(255,255,255,0.18); border-radius: 999px; height: 23px; overflow: hidden; }
-        .paycheck-bar-fill { height: 23px; background: linear-gradient(90deg, #22c55e, #a3e635); border-radius: 999px; }
+
+        .hero-card * {
+            color: #ffffff !important;
+        }
+
+        .hero-label {
+            font-size: 0.78rem;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            opacity: 0.82;
+            margin-bottom: 4px;
+            font-weight: 800;
+        }
+
+        .hero-number {
+            font-size: 2.8rem;
+            font-weight: 900;
+            margin: 2px 0 2px 0;
+            letter-spacing: -0.055em;
+        }
+
+        .hero-small {
+            opacity: 0.93;
+            font-size: 1.0rem;
+            margin-top: 5px;
+            font-weight: 500;
+        }
+
+        .paycheck-bar-wrap {
+            margin-top: 18px;
+            background: rgba(255,255,255,0.18);
+            border-radius: 999px;
+            height: 23px;
+            overflow: hidden;
+        }
+
+        .paycheck-bar-fill {
+            height: 23px;
+            background: linear-gradient(90deg, #22c55e, #a3e635);
+            border-radius: 999px;
+        }
+
         .funding-card {
-            border-radius: 20px; padding: 18px 22px 17px 22px; margin: 0 0 20px 0;
+            border-radius: 20px;
+            padding: 18px 22px 17px 22px;
+            margin: 0 0 20px 0;
             background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 54%, #e0f2fe 100%);
             border: 1px solid rgba(99, 102, 241, 0.18);
-            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.10);
+            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.07);
         }
-        .funding-topline { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; flex-wrap:wrap; }
-        .funding-label { color:#334155 !important; font-size:0.92rem; font-weight:900; letter-spacing:0.06em; text-transform:uppercase; }
-        .funding-number { color:#0f172a !important; font-size:1.85rem; font-weight:950; line-height:1.1; letter-spacing:-0.035em; margin-top:4px; }
-        .funding-pill { background:#ffffff; color:#1e3a8a !important; border:1px solid rgba(59,130,246,0.22); border-radius:999px; padding:7px 12px; font-size:0.92rem; font-weight:900; box-shadow:0 4px 12px rgba(15,23,42,0.07); }
-        .funding-note { color:#475569 !important; font-size:0.91rem; margin-top:9px; line-height:1.35; }
-        .funding-bar-wrap { margin-top:13px; background:rgba(15,23,42,0.10); border-radius:999px; height:14px; overflow:hidden; }
-        .funding-bar-fill { height:14px; background:linear-gradient(90deg, #2563eb, #22c55e); border-radius:999px; }
+
+        .funding-topline {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            align-items: flex-start;
+            flex-wrap: wrap;
+        }
+
+        .funding-label {
+            color: #334155 !important;
+            font-size: 0.76rem;
+            font-weight: 850;
+            letter-spacing: 0.10em;
+            text-transform: uppercase;
+        }
+
+        .funding-number {
+            color: #0f172a !important;
+            font-size: 1.78rem;
+            font-weight: 900;
+            line-height: 1.1;
+            letter-spacing: -0.045em;
+            margin-top: 4px;
+        }
+
+        .funding-pill {
+            background: #ffffff;
+            color: #1e3a8a !important;
+            border: 1px solid rgba(59,130,246,0.22);
+            border-radius: 999px;
+            padding: 7px 12px;
+            font-size: 0.86rem;
+            font-weight: 850;
+            box-shadow: 0 4px 10px rgba(15,23,42,0.055);
+        }
+
+        .funding-note {
+            color: #475569 !important;
+            font-size: 0.9rem;
+            margin-top: 9px;
+            line-height: 1.35;
+            font-weight: 500;
+        }
+
+        .funding-bar-wrap {
+            margin-top: 13px;
+            background: rgba(15,23,42,0.10);
+            border-radius: 999px;
+            height: 14px;
+            overflow: hidden;
+        }
+
+        .funding-bar-fill {
+            height: 14px;
+            background: linear-gradient(90deg, #2563eb, #22c55e);
+            border-radius: 999px;
+        }
+
         .metric-card {
             position: relative;
-            border-radius: 22px; padding: 20px 21px 18px 21px;
-            border: 1px solid rgba(148, 163, 184, 0.33);
-            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.09);
-            margin-bottom: 14px; min-height: 132px; overflow:hidden;
+            border-radius: 22px;
+            padding: 19px 21px 18px 21px;
+            border: 1px solid rgba(148, 163, 184, 0.30);
+            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.065);
+            margin-bottom: 14px;
+            min-height: 118px;
+            overflow: hidden;
         }
+
         .metric-card:before {
-            content:""; position:absolute; top:0; left:0; right:0; height:5px; opacity:0.95;
-            background: linear-gradient(90deg, rgba(15,23,42,0.35), rgba(15,23,42,0.08));
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            opacity: 0.8;
+            background: linear-gradient(90deg, rgba(15,23,42,0.28), rgba(15,23,42,0.06));
         }
-        .metric-blue { background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); }
-        .metric-purple { background: linear-gradient(135deg, #faf5ff 0%, #ede9fe 100%); }
-        .metric-green { background: linear-gradient(135deg, #ecfdf5 0%, #dcfce7 100%); }
-        .metric-amber { background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); }
-        .metric-gray { background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); }
-        .metric-icon { font-size:1.45rem; margin-bottom:6px; line-height:1; }
-        .metric-label { color: #334155 !important; font-size: 0.98rem; font-weight: 900; margin-bottom: 7px; letter-spacing:-0.01em; }
-        .metric-value { color: #0f172a !important; font-size: 1.85rem; font-weight: 950; line-height: 1.1; letter-spacing:-0.035em; }
-        .metric-note { color: #475569 !important; font-size: 0.90rem; margin-top: 8px; line-height:1.3; }
-        .section-title { font-size: 1.42rem; font-weight: 950; margin-bottom: 2px; color: #0f172a; letter-spacing:-0.025em; }
-        .section-subtitle { color: #64748b; font-size: 0.96rem; margin-bottom: 13px; }
+
+        .metric-blue {
+            background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+        }
+
+        .metric-purple {
+            background: linear-gradient(135deg, #faf5ff 0%, #ede9fe 100%);
+        }
+
+        .metric-green {
+            background: linear-gradient(135deg, #ecfdf5 0%, #dcfce7 100%);
+        }
+
+        .metric-amber {
+            background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+        }
+
+        .metric-gray {
+            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+        }
+
+        .metric-label {
+            color: #475569 !important;
+            font-size: 0.72rem;
+            font-weight: 850;
+            margin-bottom: 8px;
+            letter-spacing: 0.095em;
+            text-transform: uppercase;
+        }
+
+        .metric-value {
+            color: #0f172a !important;
+            font-size: 1.78rem;
+            font-weight: 900;
+            line-height: 1.1;
+            letter-spacing: -0.045em;
+        }
+
+        .metric-note {
+            color: #475569 !important;
+            font-size: 0.86rem;
+            margin-top: 8px;
+            line-height: 1.3;
+            font-weight: 500;
+        }
+
+        .section-title {
+            font-size: 1.34rem;
+            font-weight: 900;
+            margin-bottom: 2px;
+            color: #0f172a;
+            letter-spacing: -0.035em;
+        }
+
+        .section-subtitle {
+            color: #64748b;
+            font-size: 0.95rem;
+            margin-bottom: 13px;
+            font-weight: 500;
+        }
+
         .status-pill {
-            display: inline-block; border-radius: 999px; padding: 6px 12px; font-size: 0.84rem; font-weight: 800;
-            background: #ecfdf5; color: #047857 !important; border: 1px solid #bbf7d0;
+            display: inline-block;
+            border-radius: 999px;
+            padding: 6px 12px;
+            font-size: 0.82rem;
+            font-weight: 800;
+            background: #ecfdf5;
+            color: #047857 !important;
+            border: 1px solid #bbf7d0;
         }
         </style>
         """,
@@ -892,7 +1075,6 @@ def render_card(icon: str, label: str, value: str, note: str = "") -> None:
     st.markdown(
         f"""
         <div class="metric-card {tone}">
-            <div class="metric-icon">{icon}</div>
             <div class="metric-label">{label}</div>
             <div class="metric-value">{value}</div>
             <div class="metric-note">{note}</div>
@@ -947,13 +1129,13 @@ def render_state_health_box() -> None:
 
     if round_money(contributions) < round_money(protected_floor):
         st.error(
-            f"🚨 Contributions are below the protected floor. "
+            f"Contributions are below the protected floor. "
             f"Loaded: {format_dollars(contributions)} | Protected floor: {format_dollars(protected_floor)}. "
             f"Do not save unless this was an intentional contribution reduction."
         )
     else:
         st.info(
-            f"✅ Full-snapshot protection passed: contributions {format_dollars(contributions)} "
+            f"Full-snapshot protection passed: contributions {format_dollars(contributions)} "
             f"are at or above the protected floor {format_dollars(protected_floor)}."
         )
 
@@ -1000,8 +1182,8 @@ def render_paycheck_hero(calc: dict) -> None:
                 <div class="paycheck-bar-fill" style="width: {progress_pct:.1f}%;"></div>
             </div>
             <div class="hero-small" style="margin-top: 14px;">
-                🛡️ Conservative: {format_dollars(conservative)} &nbsp;&nbsp;|&nbsp;&nbsp;
-                📈 Actual estimate: {format_dollars(actual)}
+                Conservative: {format_dollars(conservative)} &nbsp;&nbsp;|&nbsp;&nbsp;
+                Actual estimate: {format_dollars(actual)}
             </div>
         </div>
         """,
@@ -1034,7 +1216,7 @@ def render_funding_goal_card(calc: dict) -> None:
         <div class="funding-card">
             <div class="funding-topline">
                 <div>
-                    <div class="funding-label">🎯 Income Machine Funding Goal</div>
+                    <div class="funding-label">Income Machine Funding Goal</div>
                     <div class="funding-number">{main_text}</div>
                 </div>
                 <div class="funding-pill">{format_percent(progress_pct)} funded</div>
@@ -1056,28 +1238,28 @@ def render_metrics(calc: dict) -> None:
     render_funding_goal_card(calc)
 
     render_section_header(
-        "📊 Account Command Center",
+        "Account Overview",
         "Cash, total value, cost basis, and gains are separated clearly."
     )
 
     m1, m2, m3 = st.columns(3)
     with m1:
-        render_card("💼", "Total Account Value", format_dollars(calc["total_portfolio_value"]), "Holdings + FDRXX cash")
+        render_card("", "Total Account Value", format_dollars(calc["total_portfolio_value"]), "Holdings + FDRXX cash")
     with m2:
-        render_card("📦", "Holdings Value", format_dollars(calc["holdings_market_value"]), "Income-producing holdings")
+        render_card("", "Holdings Value", format_dollars(calc["holdings_market_value"]), "Income-producing holdings")
     with m3:
-        render_card("💰", "Cash Ready (FDRXX)", format_dollars(calc["available_cash"]), "Available dry powder")
+        render_card("", "Cash Ready (FDRXX)", format_dollars(calc["available_cash"]), "Available dry powder")
 
     b1, b2 = st.columns(2)
     with b1:
-        render_card("📘", "Invested Cost Basis", format_dollars(calc["holdings_cost_basis"]), "Cost basis currently in holdings")
+        render_card("", "Invested Cost Basis", format_dollars(calc["holdings_cost_basis"]), "Cost basis currently in holdings")
     with b2:
-        render_card("🟢", "Holdings Gain / Loss", format_dollars(calc["holdings_gain_loss"]), "Market value minus invested basis")
+        render_card("", "Holdings Gain / Loss", format_dollars(calc["holdings_gain_loss"]), "Market value minus invested basis")
 
 
 def render_top_controls(calc: dict) -> None:
     render_section_header(
-        "💰 Cash Command Center",
+        "Cash Command Center",
         "Use this area to match Fidelity cash, update total contributions, or add new money."
     )
 
@@ -1155,7 +1337,7 @@ def render_top_controls(calc: dict) -> None:
 
 def render_deploy_cash(calc: dict) -> None:
     render_section_header(
-        "🚀 Deploy Cash Into a Position",
+        "Deploy Cash Into a Position",
         "Deploying lowers FDRXX cash and raises the selected holding. Total contributions do not change."
     )
 
@@ -1190,7 +1372,7 @@ def render_deploy_cash(calc: dict) -> None:
 
 def render_holdings_editor() -> None:
     render_section_header(
-        "🧾 Portfolio Holdings Editor",
+        "Portfolio Holdings Editor",
         "Manual share edits do NOT move cash. Use Set Exact FDRXX Cash if Fidelity cash needs to match exactly."
     )
 
@@ -1236,7 +1418,7 @@ def render_breakdowns(calc: dict) -> None:
     df = calc["df"].copy()
 
     render_section_header(
-        "📊 Holdings Breakdown",
+        "Holdings Breakdown",
         "Detailed position values, gain/loss, income estimate, and target drift."
     )
 
@@ -1277,7 +1459,7 @@ def render_breakdowns(calc: dict) -> None:
     )
 
     render_section_header(
-        "💵 Income Breakdown",
+        "Income Breakdown",
         "Estimated monthly and annual income by position."
     )
 
@@ -1300,7 +1482,7 @@ def render_breakdowns(calc: dict) -> None:
 
 def render_income_helper(calc: dict) -> None:
     render_section_header(
-        "🧭 Suggested Use of Available Cash",
+        "Suggested Use of Available Cash",
         "Priority rules: SPYI/DIVO first, then QQQI/FEPI, then smaller add-ons."
     )
 
@@ -1325,7 +1507,7 @@ def render_income_helper(calc: dict) -> None:
 
 def render_system_tools() -> None:
     render_section_header(
-        "🛠️ System Tools",
+        "System Tools",
         "Backup, restore, reload, and safety tools."
     )
 
@@ -1482,7 +1664,7 @@ def main() -> None:
     init_state()
     inject_dashboard_css()
 
-    st.markdown('<div class="dashboard-title">💵 Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
+    st.markdown('<div class="dashboard-title">Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="dashboard-subtitle">Regular production app • full-snapshot protection • stale-save rejection • restore recovery.</div>',
         unsafe_allow_html=True,

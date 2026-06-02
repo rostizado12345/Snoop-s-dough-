@@ -15,7 +15,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1-visual-polish-v3-premium-cards"
+APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1-visual-polish-v4-all-premium-cards"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -896,14 +896,35 @@ def inject_dashboard_css() -> None:
         }
 
         .funding-card {
-            border-radius: 24px;
-            padding: 21px 24px 20px 24px;
+            position: relative;
+            border-radius: 30px;
+            padding: 27px 31px 26px 31px;
             margin: 0 0 22px 0;
             background:
-                radial-gradient(circle at 94% 12%, rgba(37, 99, 235, 0.14) 0%, transparent 40%),
-                linear-gradient(135deg, #f8fafc 0%, #eef2ff 54%, #e0f2fe 100%);
-            border: 1px solid rgba(99, 102, 241, 0.22);
-            box-shadow: 0 15px 34px rgba(15, 23, 42, 0.10);
+                radial-gradient(circle at 88% 18%, rgba(96,165,250,0.36) 0%, rgba(96,165,250,0.08) 34%, transparent 54%),
+                linear-gradient(135deg, #020617 0%, #0f172a 46%, #1e3a8a 100%);
+            color: #ffffff !important;
+            border: 1px solid rgba(255,255,255,0.14);
+            box-shadow: 0 26px 62px rgba(15, 23, 42, 0.30);
+            overflow: hidden;
+        }
+
+        .funding-card:after {
+            content: "";
+            position: absolute;
+            width: 220px;
+            height: 220px;
+            right: -88px;
+            top: -98px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.08);
+            pointer-events: none;
+        }
+
+        .funding-card * {
+            color: #ffffff !important;
+            position: relative;
+            z-index: 2;
         }
 
         .funding-topline {
@@ -915,54 +936,58 @@ def inject_dashboard_css() -> None:
         }
 
         .funding-label {
-            color: #334155 !important;
-            font-size: 0.76rem;
-            font-weight: 900;
-            letter-spacing: 0.11em;
+            color: #ffffff !important;
+            font-size: 0.78rem;
+            font-weight: 950;
+            letter-spacing: 0.13em;
             text-transform: uppercase;
+            opacity: 0.84;
         }
 
         .funding-number {
-            color: #0f172a !important;
-            font-size: 1.9rem;
+            color: #ffffff !important;
+            font-size: 2.35rem;
             font-weight: 950;
-            line-height: 1.1;
-            letter-spacing: -0.05em;
-            margin-top: 4px;
+            line-height: 1.04;
+            letter-spacing: -0.06em;
+            margin-top: 7px;
         }
 
         .funding-pill {
-            background: #ffffff;
-            color: #1e3a8a !important;
-            border: 1px solid rgba(59,130,246,0.24);
+            background: rgba(255,255,255,0.14);
+            color: #ffffff !important;
+            border: 1px solid rgba(255,255,255,0.18);
             border-radius: 999px;
             padding: 8px 13px;
             font-size: 0.88rem;
-            font-weight: 900;
-            box-shadow: 0 7px 16px rgba(15,23,42,0.08);
+            font-weight: 950;
+            box-shadow: 0 10px 22px rgba(0,0,0,0.16);
+            backdrop-filter: blur(10px);
         }
 
         .funding-note {
-            color: #475569 !important;
-            font-size: 0.9rem;
-            margin-top: 10px;
-            line-height: 1.35;
-            font-weight: 550;
+            color: #ffffff !important;
+            font-size: 0.95rem;
+            margin-top: 12px;
+            line-height: 1.38;
+            font-weight: 650;
+            opacity: 0.88;
         }
 
         .funding-bar-wrap {
-            margin-top: 14px;
-            background: rgba(15,23,42,0.10);
+            margin-top: 16px;
+            background: rgba(255,255,255,0.18);
             border-radius: 999px;
-            height: 15px;
+            height: 18px;
             overflow: hidden;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.22);
         }
 
         .funding-bar-fill {
-            height: 15px;
-            background: linear-gradient(90deg, #2563eb, #22c55e);
+            height: 18px;
+            background: linear-gradient(90deg, #22c55e, #bef264);
             border-radius: 999px;
-            box-shadow: 0 0 16px rgba(37,99,235,0.28);
+            box-shadow: 0 0 22px rgba(34,197,94,0.45);
         }
 
         .main-value-card {
@@ -1043,26 +1068,32 @@ def inject_dashboard_css() -> None:
 
         .premium-metric-card {
             position: relative;
-            border-radius: 27px;
-            padding: 23px 24px 22px 27px;
-            min-height: 154px;
-            margin-bottom: 16px;
-            box-shadow:
-                0 20px 42px rgba(15, 23, 42, 0.13),
-                inset 0 1px 0 rgba(255,255,255,0.76);
-            border: 1px solid rgba(148, 163, 184, 0.32);
+            border-radius: 30px;
+            padding: 27px 30px 26px 31px;
+            min-height: 162px;
+            margin-bottom: 18px;
+            background:
+                radial-gradient(circle at 88% 18%, rgba(96,165,250,0.36) 0%, rgba(96,165,250,0.08) 34%, transparent 54%),
+                linear-gradient(135deg, #020617 0%, #0f172a 46%, #1e3a8a 100%);
+            color: #ffffff !important;
+            box-shadow: 0 26px 62px rgba(15, 23, 42, 0.30);
+            border: 1px solid rgba(255,255,255,0.14);
             overflow: hidden;
+        }
+
+        .premium-metric-card * {
+            color: #ffffff !important;
         }
 
         .premium-metric-card:after {
             content: "";
             position: absolute;
-            width: 155px;
-            height: 155px;
-            right: -68px;
-            top: -72px;
+            width: 220px;
+            height: 220px;
+            right: -88px;
+            top: -98px;
             border-radius: 999px;
-            background: rgba(255,255,255,0.50);
+            background: rgba(255,255,255,0.08);
             pointer-events: none;
         }
 
@@ -1070,7 +1101,7 @@ def inject_dashboard_css() -> None:
             position: absolute;
             left: 0;
             top: 0;
-            width: 8px;
+            width: 0;
             height: 100%;
         }
 
@@ -1080,34 +1111,14 @@ def inject_dashboard_css() -> None:
         .premium-accent.amber { background: linear-gradient(180deg, #fde68a, #d97706); }
         .premium-accent.gray { background: linear-gradient(180deg, #cbd5e1, #64748b); }
 
-        .metric-blue {
-            background:
-                radial-gradient(circle at 94% 12%, rgba(37,99,235,0.15) 0%, transparent 42%),
-                linear-gradient(135deg, #f8fbff 0%, #eff6ff 42%, #dbeafe 100%);
-        }
-
-        .metric-green {
-            background:
-                radial-gradient(circle at 94% 12%, rgba(22,163,74,0.15) 0%, transparent 42%),
-                linear-gradient(135deg, #f7fffb 0%, #ecfdf5 42%, #dcfce7 100%);
-        }
-
-        .metric-purple {
-            background:
-                radial-gradient(circle at 94% 12%, rgba(124,58,237,0.15) 0%, transparent 42%),
-                linear-gradient(135deg, #fffbff 0%, #faf5ff 42%, #ede9fe 100%);
-        }
-
-        .metric-amber {
-            background:
-                radial-gradient(circle at 94% 12%, rgba(217,119,6,0.15) 0%, transparent 42%),
-                linear-gradient(135deg, #fffdf5 0%, #fffbeb 42%, #fef3c7 100%);
-        }
-
+        .metric-blue,
+        .metric-green,
+        .metric-purple,
+        .metric-amber,
         .metric-gray {
             background:
-                radial-gradient(circle at 94% 12%, rgba(100,116,139,0.13) 0%, transparent 42%),
-                linear-gradient(135deg, #ffffff 0%, #f8fafc 45%, #e2e8f0 100%);
+                radial-gradient(circle at 88% 18%, rgba(96,165,250,0.36) 0%, rgba(96,165,250,0.08) 34%, transparent 54%),
+                linear-gradient(135deg, #020617 0%, #0f172a 46%, #1e3a8a 100%);
         }
 
         .premium-card-top {
@@ -1120,44 +1131,46 @@ def inject_dashboard_css() -> None:
         }
 
         .premium-label {
-            color: #475569 !important;
-            font-size: 0.75rem;
+            color: #ffffff !important;
+            font-size: 0.80rem;
             font-weight: 950;
             text-transform: uppercase;
-            letter-spacing: 0.105em;
+            letter-spacing: 0.13em;
+            opacity: 0.84;
         }
 
         .premium-value {
-            color: #0f172a !important;
-            font-size: 2.1rem;
+            color: #ffffff !important;
+            font-size: 2.25rem;
             font-weight: 950;
-            letter-spacing: -0.058em;
-            line-height: 1.05;
+            letter-spacing: -0.06em;
+            line-height: 1.04;
             margin-top: 10px;
         }
 
         .premium-note {
-            color: #475569 !important;
-            font-size: 0.9rem;
+            color: #ffffff !important;
+            font-size: 0.94rem;
             font-weight: 650;
-            margin-top: 13px;
-            line-height: 1.3;
+            margin-top: 14px;
+            line-height: 1.35;
+            opacity: 0.88;
             position: relative;
             z-index: 2;
         }
 
         .premium-icon {
-            width: 56px;
-            height: 56px;
-            min-width: 56px;
-            border-radius: 21px;
-            background: rgba(255,255,255,0.80);
-            border: 1px solid rgba(148,163,184,0.34);
+            width: 62px;
+            height: 62px;
+            min-width: 62px;
+            border-radius: 23px;
+            background: rgba(255,255,255,0.14);
+            border: 1px solid rgba(255,255,255,0.18);
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.9rem;
-            box-shadow: 0 11px 24px rgba(15,23,42,0.13);
+            font-size: 2.15rem;
+            box-shadow: 0 14px 30px rgba(0,0,0,0.18);
         }
 
         .section-title {
@@ -1197,27 +1210,27 @@ def render_card(icon: str, label: str, value: str, note: str = "") -> None:
     if any(word in label_lower for word in ["cash", "fdrxx", "deploy"]):
         tone = "metric-green"
         accent = "green"
-        default_icon = "💵"
+        default_icon = "ðµ"
     elif any(word in label_lower for word in ["gain", "profit", "loss"]):
         tone = "metric-amber"
         accent = "amber"
-        default_icon = "📈"
+        default_icon = "ð"
     elif any(word in label_lower for word in ["basis", "cost"]):
         tone = "metric-purple"
         accent = "purple"
-        default_icon = "🎯"
+        default_icon = "ð¯"
     elif any(word in label_lower for word in ["holdings"]):
         tone = "metric-blue"
         accent = "blue"
-        default_icon = "📊"
+        default_icon = "ð"
     elif any(word in label_lower for word in ["value", "contribution"]):
         tone = "metric-blue"
         accent = "blue"
-        default_icon = "🏦"
+        default_icon = "ð¦"
     else:
         tone = "metric-gray"
         accent = "gray"
-        default_icon = "•"
+        default_icon = "â¢"
 
     display_icon = icon or default_icon
 
@@ -1415,7 +1428,7 @@ def render_metrics(calc: dict) -> None:
                 <div class="main-value-number">{format_dollars(total_value)}</div>
                 <div class="main-value-note">Holdings + FDRXX cash</div>
             </div>
-            <div class="main-value-icon">🏦</div>
+            <div class="main-value-icon">ð¦</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1423,15 +1436,15 @@ def render_metrics(calc: dict) -> None:
 
     m1, m2 = st.columns(2)
     with m1:
-        render_card("📊", "Holdings Value", format_dollars(holdings_value), f"{format_percent(invested_pct)} currently invested")
+        render_card("ð", "Holdings Value", format_dollars(holdings_value), f"{format_percent(invested_pct)} currently invested")
     with m2:
-        render_card("💵", "Cash Ready (FDRXX)", format_dollars(cash_value), f"{format_percent(cash_pct)} available dry powder")
+        render_card("ðµ", "Cash Ready (FDRXX)", format_dollars(cash_value), f"{format_percent(cash_pct)} available dry powder")
 
     b1, b2 = st.columns(2)
     with b1:
-        render_card("🎯", "Invested Cost Basis", format_dollars(holdings_basis), "Cost basis currently in holdings")
+        render_card("ð¯", "Invested Cost Basis", format_dollars(holdings_basis), "Cost basis currently in holdings")
     with b2:
-        render_card("📈", "Holdings Gain / Loss", format_dollars(holdings_gain_loss), f"{format_percent(gain_loss_pct)} return on invested basis")
+        render_card("ð", "Holdings Gain / Loss", format_dollars(holdings_gain_loss), f"{format_percent(gain_loss_pct)} return on invested basis")
 
 
 def render_top_controls(calc: dict) -> None:

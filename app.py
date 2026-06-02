@@ -15,7 +15,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1-visual-polish-v6-consistent-light-cards"
+APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1-visual-polish-v7-percent-cards-icons-fixed"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -1156,6 +1156,22 @@ def inject_dashboard_css() -> None:
             white-space: nowrap;
         }
 
+        .premium-percent {
+            display: inline-flex;
+            align-items: center;
+            width: fit-content;
+            margin-top: 11px;
+            padding: 5px 10px;
+            border-radius: 999px;
+            background: rgba(15,23,42,0.06);
+            border: 1px solid rgba(148,163,184,0.24);
+            color: #334155 !important;
+            font-size: 0.82rem;
+            font-weight: 850;
+            line-height: 1.1;
+            letter-spacing: -0.01em;
+        }
+
         .premium-note {
             color: #64748b !important;
             font-size: 0.92rem;
@@ -1211,35 +1227,36 @@ def inject_dashboard_css() -> None:
     )
 
 
-def render_card(icon: str, label: str, value: str, note: str = "") -> None:
+def render_card(icon: str, label: str, value: str, percent_text: str = "", note: str = "") -> None:
     label_lower = label.lower()
 
     if any(word in label_lower for word in ["cash", "fdrxx", "deploy"]):
         tone = "metric-green"
         accent = "green"
-        default_icon = "ðµ"
+        default_icon = "&#128181;"
     elif any(word in label_lower for word in ["gain", "profit", "loss"]):
         tone = "metric-amber"
         accent = "amber"
-        default_icon = "ð"
+        default_icon = "&#128200;"
     elif any(word in label_lower for word in ["basis", "cost"]):
         tone = "metric-purple"
         accent = "purple"
-        default_icon = "ð¯"
+        default_icon = "&#127919;"
     elif any(word in label_lower for word in ["holdings"]):
         tone = "metric-blue"
         accent = "blue"
-        default_icon = "ð"
+        default_icon = "&#128202;"
     elif any(word in label_lower for word in ["value", "contribution", "net"]):
         tone = "metric-blue"
         accent = "blue"
-        default_icon = "ð¦"
+        default_icon = "&#127974;"
     else:
         tone = "metric-gray"
         accent = "gray"
-        default_icon = "â¢"
+        default_icon = "&#8226;"
 
     display_icon = icon or default_icon
+    percent_html = f'<div class="premium-percent">{percent_text}</div>' if percent_text else ""
 
     st.markdown(
         f"""
@@ -1249,6 +1266,7 @@ def render_card(icon: str, label: str, value: str, note: str = "") -> None:
                 <div>
                     <div class="premium-label">{label}</div>
                     <div class="premium-value">{value}</div>
+                    {percent_html}
                 </div>
                 <div class="premium-icon">{display_icon}</div>
             </div>
@@ -1257,7 +1275,6 @@ def render_card(icon: str, label: str, value: str, note: str = "") -> None:
         """,
         unsafe_allow_html=True,
     )
-
 
 def render_section_header(title: str, subtitle: str = "") -> None:
     st.markdown(
@@ -1423,30 +1440,59 @@ def render_metrics(calc: dict) -> None:
     holdings_basis = float(calc["holdings_cost_basis"])
     holdings_gain_loss = float(calc["holdings_gain_loss"])
     total_contributions = float(calc["total_contributions"])
-    net_vs_contributions = float(calc["net_vs_contributions"])
 
     invested_pct = (holdings_value / total_value * 100.0) if total_value > 0 else 0.0
     cash_pct = (cash_value / total_value * 100.0) if total_value > 0 else 0.0
+    basis_pct = (holdings_basis / total_value * 100.0) if total_value > 0 else 0.0
     gain_loss_pct = (holdings_gain_loss / holdings_basis * 100.0) if holdings_basis > 0 else 0.0
 
     row1_col1, row1_col2 = st.columns(2)
     with row1_col1:
-        render_card("ð¦", "Total Account Value", format_dollars(total_value), "Holdings + FDRXX cash")
+        render_card(
+            "&#127974;",
+            "Total Account Value",
+            format_dollars(total_value),
+            "100.0% of account",
+            f"Holdings + FDRXX cash | Contributions: {format_dollars(total_contributions)}",
+        )
     with row1_col2:
-        render_card("ð", "Holdings Value", format_dollars(holdings_value), f"{format_percent(invested_pct)} currently invested")
+        render_card(
+            "&#128202;",
+            "Holdings Value",
+            format_dollars(holdings_value),
+            f"{format_percent(invested_pct)} of account",
+            "Currently invested holdings only",
+        )
 
     row2_col1, row2_col2 = st.columns(2)
     with row2_col1:
-        render_card("ðµ", "Cash Ready (FDRXX)", format_dollars(cash_value), f"{format_percent(cash_pct)} available dry powder")
+        render_card(
+            "&#128181;",
+            "Cash Ready (FDRXX)",
+            format_dollars(cash_value),
+            f"{format_percent(cash_pct)} of account",
+            "Available dry powder",
+        )
     with row2_col2:
-        render_card("ð¯", "Invested Cost Basis", format_dollars(holdings_basis), "Cost basis currently in holdings")
+        render_card(
+            "&#127919;",
+            "Invested Cost Basis",
+            format_dollars(holdings_basis),
+            f"{format_percent(basis_pct)} of account",
+            "Cost basis currently in holdings",
+        )
 
     row3_col1, row3_col2 = st.columns(2)
     with row3_col1:
-        render_card("ð", "Holdings Gain / Loss", format_dollars(holdings_gain_loss), f"{format_percent(gain_loss_pct)} return on invested basis")
+        render_card(
+            "&#128200;",
+            "Holdings Gain / Loss",
+            format_dollars(holdings_gain_loss),
+            f"{format_percent(gain_loss_pct)} vs invested basis",
+            "Holdings gain/loss only",
+        )
     with row3_col2:
-        render_card("ð¦", "Net vs Contributions", format_dollars(net_vs_contributions), f"Total contributions: {format_dollars(total_contributions)}")
-
+        st.empty()
 
 def render_top_controls(calc: dict) -> None:
     render_section_header(

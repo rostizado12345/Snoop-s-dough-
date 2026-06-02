@@ -15,7 +15,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5"
+APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -815,38 +815,58 @@ def inject_dashboard_css() -> None:
     st.markdown(
         """
         <style>
-        .main .block-container { padding-top: 1.1rem; padding-bottom: 2rem; max-width: 1400px; }
-        .dashboard-title { font-size: 2.25rem; font-weight: 900; margin-bottom: 0.15rem; color: #0f172a; }
-        .dashboard-subtitle { color: #64748b; font-size: 1.02rem; margin-bottom: 1.0rem; }
+        .main .block-container { padding-top: 1.05rem; padding-bottom: 2rem; max-width: 1420px; }
+        .dashboard-title { font-size: 2.35rem; font-weight: 950; margin-bottom: 0.1rem; color: #0f172a; letter-spacing: -0.03em; }
+        .dashboard-subtitle { color: #64748b; font-size: 1.04rem; margin-bottom: 1.0rem; }
         .hero-card {
-            border-radius: 24px; padding: 26px 28px; margin: 10px 0 18px 0;
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #334155 100%);
-            color: #ffffff !important; box-shadow: 0 14px 30px rgba(15, 23, 42, 0.22);
+            border-radius: 26px; padding: 28px 30px; margin: 10px 0 14px 0;
+            background: linear-gradient(135deg, #0f172a 0%, #172033 48%, #334155 100%);
+            color: #ffffff !important; box-shadow: 0 18px 40px rgba(15, 23, 42, 0.25);
+            border: 1px solid rgba(255,255,255,0.10);
         }
         .hero-card * { color: #ffffff !important; }
-        .hero-label { font-size: 0.90rem; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.82; margin-bottom: 4px; }
-        .hero-number { font-size: 2.7rem; font-weight: 900; margin: 2px 0 2px 0; }
-        .hero-small { opacity: 0.92; font-size: 1.0rem; margin-top: 4px; }
-        .paycheck-bar-wrap { margin-top: 18px; background: rgba(255,255,255,0.18); border-radius: 999px; height: 22px; overflow: hidden; }
-        .paycheck-bar-fill { height: 22px; background: linear-gradient(90deg, #22c55e, #84cc16); border-radius: 999px; }
+        .hero-label { font-size: 0.92rem; letter-spacing: 0.10em; text-transform: uppercase; opacity: 0.84; margin-bottom: 4px; font-weight: 850; }
+        .hero-number { font-size: 2.95rem; font-weight: 950; margin: 2px 0 2px 0; letter-spacing: -0.045em; }
+        .hero-small { opacity: 0.94; font-size: 1.04rem; margin-top: 5px; }
+        .paycheck-bar-wrap { margin-top: 18px; background: rgba(255,255,255,0.18); border-radius: 999px; height: 23px; overflow: hidden; }
+        .paycheck-bar-fill { height: 23px; background: linear-gradient(90deg, #22c55e, #a3e635); border-radius: 999px; }
+        .funding-card {
+            border-radius: 20px; padding: 18px 22px 17px 22px; margin: 0 0 20px 0;
+            background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 54%, #e0f2fe 100%);
+            border: 1px solid rgba(99, 102, 241, 0.18);
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.10);
+        }
+        .funding-topline { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; flex-wrap:wrap; }
+        .funding-label { color:#334155 !important; font-size:0.92rem; font-weight:900; letter-spacing:0.06em; text-transform:uppercase; }
+        .funding-number { color:#0f172a !important; font-size:1.85rem; font-weight:950; line-height:1.1; letter-spacing:-0.035em; margin-top:4px; }
+        .funding-pill { background:#ffffff; color:#1e3a8a !important; border:1px solid rgba(59,130,246,0.22); border-radius:999px; padding:7px 12px; font-size:0.92rem; font-weight:900; box-shadow:0 4px 12px rgba(15,23,42,0.07); }
+        .funding-note { color:#475569 !important; font-size:0.91rem; margin-top:9px; line-height:1.35; }
+        .funding-bar-wrap { margin-top:13px; background:rgba(15,23,42,0.10); border-radius:999px; height:14px; overflow:hidden; }
+        .funding-bar-fill { height:14px; background:linear-gradient(90deg, #2563eb, #22c55e); border-radius:999px; }
         .metric-card {
-            border-radius: 18px; padding: 18px 18px 16px 18px;
-            border: 1px solid rgba(148, 163, 184, 0.35);
-            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.07);
-            margin-bottom: 12px; min-height: 118px;
+            position: relative;
+            border-radius: 22px; padding: 20px 21px 18px 21px;
+            border: 1px solid rgba(148, 163, 184, 0.33);
+            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.09);
+            margin-bottom: 14px; min-height: 132px; overflow:hidden;
+        }
+        .metric-card:before {
+            content:""; position:absolute; top:0; left:0; right:0; height:5px; opacity:0.95;
+            background: linear-gradient(90deg, rgba(15,23,42,0.35), rgba(15,23,42,0.08));
         }
         .metric-blue { background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); }
         .metric-purple { background: linear-gradient(135deg, #faf5ff 0%, #ede9fe 100%); }
         .metric-green { background: linear-gradient(135deg, #ecfdf5 0%, #dcfce7 100%); }
         .metric-amber { background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); }
         .metric-gray { background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); }
-        .metric-label { color: #334155 !important; font-size: 0.88rem; font-weight: 800; margin-bottom: 6px; }
-        .metric-value { color: #0f172a !important; font-size: 1.55rem; font-weight: 900; line-height: 1.15; }
-        .metric-note { color: #475569 !important; font-size: 0.82rem; margin-top: 7px; }
-        .section-title { font-size: 1.35rem; font-weight: 900; margin-bottom: 2px; color: #0f172a; }
-        .section-subtitle { color: #64748b; font-size: 0.93rem; margin-bottom: 12px; }
+        .metric-icon { font-size:1.45rem; margin-bottom:6px; line-height:1; }
+        .metric-label { color: #334155 !important; font-size: 0.98rem; font-weight: 900; margin-bottom: 7px; letter-spacing:-0.01em; }
+        .metric-value { color: #0f172a !important; font-size: 1.85rem; font-weight: 950; line-height: 1.1; letter-spacing:-0.035em; }
+        .metric-note { color: #475569 !important; font-size: 0.90rem; margin-top: 8px; line-height:1.3; }
+        .section-title { font-size: 1.42rem; font-weight: 950; margin-bottom: 2px; color: #0f172a; letter-spacing:-0.025em; }
+        .section-subtitle { color: #64748b; font-size: 0.96rem; margin-bottom: 13px; }
         .status-pill {
-            display: inline-block; border-radius: 999px; padding: 5px 11px; font-size: 0.82rem; font-weight: 750;
+            display: inline-block; border-radius: 999px; padding: 6px 12px; font-size: 0.84rem; font-weight: 800;
             background: #ecfdf5; color: #047857 !important; border: 1px solid #bbf7d0;
         }
         </style>
@@ -872,7 +892,7 @@ def render_card(icon: str, label: str, value: str, note: str = "") -> None:
     st.markdown(
         f"""
         <div class="metric-card {tone}">
-            <div style="font-size:1.25rem;margin-bottom:4px;">{icon}</div>
+            <div class="metric-icon">{icon}</div>
             <div class="metric-label">{label}</div>
             <div class="metric-value">{value}</div>
             <div class="metric-note">{note}</div>
@@ -989,31 +1009,70 @@ def render_paycheck_hero(calc: dict) -> None:
     )
 
 
+def render_funding_goal_card(calc: dict) -> None:
+    holdings_value = float(calc.get("holdings_market_value", 0.0))
+    realistic_income = float(calc.get("monthly_realistic", 0.0))
+
+    if holdings_value > 0 and realistic_income > 0:
+        realistic_income_rate = realistic_income / holdings_value
+        estimated_needed = GOAL_MONTHLY / realistic_income_rate if realistic_income_rate > 0 else 0.0
+        funded_pct = holdings_value / estimated_needed if estimated_needed > 0 else 0.0
+    else:
+        estimated_needed = 0.0
+        funded_pct = 0.0
+
+    progress_pct = max(0.0, min(funded_pct * 100.0, 100.0))
+
+    if estimated_needed > 0:
+        needed_text = format_dollars(estimated_needed)
+        main_text = f"{format_dollars(holdings_value)} / {needed_text}"
+    else:
+        main_text = f"{format_dollars(holdings_value)} / calculating..."
+
+    st.markdown(
+        f"""
+        <div class="funding-card">
+            <div class="funding-topline">
+                <div>
+                    <div class="funding-label">🎯 Income Machine Funding Goal</div>
+                    <div class="funding-number">{main_text}</div>
+                </div>
+                <div class="funding-pill">{format_percent(progress_pct)} funded</div>
+            </div>
+            <div class="funding-bar-wrap">
+                <div class="funding-bar-fill" style="width: {progress_pct:.1f}%;"></div>
+            </div>
+            <div class="funding-note">
+                Estimated invested holdings needed to generate {format_dollars(GOAL_MONTHLY)}/month at the current realistic income rate. Based on invested holdings only; deploying FDRXX cash increases progress.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_metrics(calc: dict) -> None:
     render_paycheck_hero(calc)
+    render_funding_goal_card(calc)
 
     render_section_header(
         "📊 Account Command Center",
         "Cash, total value, cost basis, and gains are separated clearly."
     )
 
-    m1, m2 = st.columns(2)
+    m1, m2, m3 = st.columns(3)
     with m1:
         render_card("💼", "Total Account Value", format_dollars(calc["total_portfolio_value"]), "Holdings + FDRXX cash")
     with m2:
-        render_card("📦", "Holdings Value", format_dollars(calc["holdings_market_value"]), "Money currently invested")
+        render_card("📦", "Holdings Value", format_dollars(calc["holdings_market_value"]), "Income-producing holdings")
+    with m3:
+        render_card("💰", "Cash Ready (FDRXX)", format_dollars(calc["available_cash"]), "Available dry powder")
 
     b1, b2 = st.columns(2)
     with b1:
-        render_card("💰", "Cash Ready (FDRXX)", format_dollars(calc["available_cash"]), "Available dry powder")
+        render_card("📘", "Invested Cost Basis", format_dollars(calc["holdings_cost_basis"]), "Cost basis currently in holdings")
     with b2:
-        render_card("📦", "Invested Cost Basis", format_dollars(calc["holdings_cost_basis"]), "Cost basis currently in holdings")
-
-    g1, g2 = st.columns(2)
-    with g1:
         render_card("🟢", "Holdings Gain / Loss", format_dollars(calc["holdings_gain_loss"]), "Market value minus invested basis")
-    with g2:
-        st.empty()
 
 
 def render_top_controls(calc: dict) -> None:

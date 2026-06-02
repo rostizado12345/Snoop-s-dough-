@@ -15,7 +15,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1-visual-polish-v5-icons-colors-fixed"
+APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1-visual-polish-v6-consistent-light-cards"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -1068,32 +1068,30 @@ def inject_dashboard_css() -> None:
 
         .premium-metric-card {
             position: relative;
-            border-radius: 30px;
-            padding: 27px 30px 26px 31px;
-            min-height: 162px;
+            border-radius: 24px;
+            padding: 22px 24px 21px 25px;
+            min-height: 150px;
             margin-bottom: 18px;
-            background:
-                radial-gradient(circle at 88% 18%, rgba(96,165,250,0.36) 0%, rgba(96,165,250,0.08) 34%, transparent 54%),
-                linear-gradient(135deg, #020617 0%, #0f172a 46%, #1e3a8a 100%);
-            color: #ffffff !important;
-            box-shadow: 0 26px 62px rgba(15, 23, 42, 0.30);
-            border: 1px solid rgba(255,255,255,0.14);
+            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+            color: #0f172a !important;
+            box-shadow: 0 14px 34px rgba(15, 23, 42, 0.12);
+            border: 1px solid rgba(148,163,184,0.28);
             overflow: hidden;
         }
 
         .premium-metric-card * {
-            color: #ffffff !important;
+            color: inherit !important;
         }
 
         .premium-metric-card:after {
             content: "";
             position: absolute;
-            width: 220px;
-            height: 220px;
-            right: -88px;
-            top: -98px;
+            width: 190px;
+            height: 190px;
+            right: -84px;
+            top: -92px;
             border-radius: 999px;
-            background: rgba(255,255,255,0.08);
+            background: rgba(59,130,246,0.07);
             pointer-events: none;
         }
 
@@ -1105,40 +1103,30 @@ def inject_dashboard_css() -> None:
             height: 100%;
         }
 
-        .premium-accent.blue { background: linear-gradient(180deg, #93c5fd, #2563eb); }
-        .premium-accent.green { background: linear-gradient(180deg, #86efac, #16a34a); }
-        .premium-accent.purple { background: linear-gradient(180deg, #d8b4fe, #7c3aed); }
-        .premium-accent.amber { background: linear-gradient(180deg, #fde68a, #d97706); }
-        .premium-accent.gray { background: linear-gradient(180deg, #cbd5e1, #64748b); }
+        .premium-accent.blue { background: linear-gradient(180deg, #60a5fa, #2563eb); }
+        .premium-accent.green { background: linear-gradient(180deg, #4ade80, #16a34a); }
+        .premium-accent.purple { background: linear-gradient(180deg, #c084fc, #7c3aed); }
+        .premium-accent.amber { background: linear-gradient(180deg, #fbbf24, #d97706); }
+        .premium-accent.gray { background: linear-gradient(180deg, #94a3b8, #475569); }
 
         .metric-blue {
-            background:
-                radial-gradient(circle at 88% 18%, rgba(147,197,253,0.38) 0%, rgba(147,197,253,0.09) 34%, transparent 54%),
-                linear-gradient(135deg, #020617 0%, #0f172a 42%, #1d4ed8 100%);
+            background: linear-gradient(180deg, #ffffff 0%, #eff6ff 100%);
         }
 
         .metric-green {
-            background:
-                radial-gradient(circle at 88% 18%, rgba(134,239,172,0.40) 0%, rgba(134,239,172,0.10) 34%, transparent 54%),
-                linear-gradient(135deg, #022c22 0%, #064e3b 46%, #16a34a 100%);
+            background: linear-gradient(180deg, #ffffff 0%, #ecfdf5 100%);
         }
 
         .metric-purple {
-            background:
-                radial-gradient(circle at 88% 18%, rgba(216,180,254,0.40) 0%, rgba(216,180,254,0.10) 34%, transparent 54%),
-                linear-gradient(135deg, #1e1b4b 0%, #4c1d95 46%, #7c3aed 100%);
+            background: linear-gradient(180deg, #ffffff 0%, #faf5ff 100%);
         }
 
         .metric-amber {
-            background:
-                radial-gradient(circle at 88% 18%, rgba(253,230,138,0.42) 0%, rgba(253,230,138,0.10) 34%, transparent 54%),
-                linear-gradient(135deg, #431407 0%, #78350f 46%, #d97706 100%);
+            background: linear-gradient(180deg, #ffffff 0%, #fffbeb 100%);
         }
 
         .metric-gray {
-            background:
-                radial-gradient(circle at 88% 18%, rgba(203,213,225,0.34) 0%, rgba(203,213,225,0.08) 34%, transparent 54%),
-                linear-gradient(135deg, #020617 0%, #1e293b 46%, #475569 100%);
+            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
         }
 
         .premium-card-top {
@@ -1151,46 +1139,45 @@ def inject_dashboard_css() -> None:
         }
 
         .premium-label {
-            color: #ffffff !important;
-            font-size: 0.80rem;
+            color: #475569 !important;
+            font-size: 0.76rem;
             font-weight: 950;
             text-transform: uppercase;
-            letter-spacing: 0.13em;
-            opacity: 0.84;
+            letter-spacing: 0.12em;
         }
 
         .premium-value {
-            color: #ffffff !important;
-            font-size: 2.25rem;
+            color: #0f172a !important;
+            font-size: 2.05rem;
             font-weight: 950;
-            letter-spacing: -0.06em;
-            line-height: 1.04;
+            letter-spacing: -0.055em;
+            line-height: 1.05;
             margin-top: 10px;
+            white-space: nowrap;
         }
 
         .premium-note {
-            color: #ffffff !important;
-            font-size: 0.94rem;
+            color: #64748b !important;
+            font-size: 0.92rem;
             font-weight: 650;
-            margin-top: 14px;
+            margin-top: 13px;
             line-height: 1.35;
-            opacity: 0.88;
             position: relative;
             z-index: 2;
         }
 
         .premium-icon {
-            width: 62px;
-            height: 62px;
-            min-width: 62px;
-            border-radius: 23px;
-            background: rgba(255,255,255,0.14);
-            border: 1px solid rgba(255,255,255,0.18);
+            width: 54px;
+            height: 54px;
+            min-width: 54px;
+            border-radius: 19px;
+            background: rgba(15,23,42,0.06);
+            border: 1px solid rgba(148,163,184,0.26);
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 2.15rem;
-            box-shadow: 0 14px 30px rgba(0,0,0,0.18);
+            font-size: 1.95rem;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.85);
         }
 
         .section-title {
@@ -1243,7 +1230,7 @@ def render_card(icon: str, label: str, value: str, note: str = "") -> None:
         tone = "metric-blue"
         accent = "blue"
         default_icon = "ð"
-    elif any(word in label_lower for word in ["value", "contribution"]):
+    elif any(word in label_lower for word in ["value", "contribution", "net"]):
         tone = "metric-blue"
         accent = "blue"
         default_icon = "ð¦"
@@ -1435,36 +1422,30 @@ def render_metrics(calc: dict) -> None:
     cash_value = float(calc["available_cash"])
     holdings_basis = float(calc["holdings_cost_basis"])
     holdings_gain_loss = float(calc["holdings_gain_loss"])
+    total_contributions = float(calc["total_contributions"])
+    net_vs_contributions = float(calc["net_vs_contributions"])
 
     invested_pct = (holdings_value / total_value * 100.0) if total_value > 0 else 0.0
     cash_pct = (cash_value / total_value * 100.0) if total_value > 0 else 0.0
     gain_loss_pct = (holdings_gain_loss / holdings_basis * 100.0) if holdings_basis > 0 else 0.0
 
-    st.markdown(
-        f"""
-        <div class="main-value-card">
-            <div class="main-value-left">
-                <div class="main-value-label">Total Account Value</div>
-                <div class="main-value-number">{format_dollars(total_value)}</div>
-                <div class="main-value-note">Holdings + FDRXX cash</div>
-            </div>
-            <div class="main-value-icon">ð¦</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    m1, m2 = st.columns(2)
-    with m1:
+    row1_col1, row1_col2 = st.columns(2)
+    with row1_col1:
+        render_card("ð¦", "Total Account Value", format_dollars(total_value), "Holdings + FDRXX cash")
+    with row1_col2:
         render_card("ð", "Holdings Value", format_dollars(holdings_value), f"{format_percent(invested_pct)} currently invested")
-    with m2:
-        render_card("ðµ", "Cash Ready (FDRXX)", format_dollars(cash_value), f"{format_percent(cash_pct)} available dry powder")
 
-    b1, b2 = st.columns(2)
-    with b1:
+    row2_col1, row2_col2 = st.columns(2)
+    with row2_col1:
+        render_card("ðµ", "Cash Ready (FDRXX)", format_dollars(cash_value), f"{format_percent(cash_pct)} available dry powder")
+    with row2_col2:
         render_card("ð¯", "Invested Cost Basis", format_dollars(holdings_basis), "Cost basis currently in holdings")
-    with b2:
+
+    row3_col1, row3_col2 = st.columns(2)
+    with row3_col1:
         render_card("ð", "Holdings Gain / Loss", format_dollars(holdings_gain_loss), f"{format_percent(gain_loss_pct)} return on invested basis")
+    with row3_col2:
+        render_card("ð¦", "Net vs Contributions", format_dollars(net_vs_contributions), f"Total contributions: {format_dollars(total_contributions)}")
 
 
 def render_top_controls(calc: dict) -> None:

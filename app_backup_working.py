@@ -13,9 +13,10 @@ except Exception:
     yf = None
 
 
-st.set_page_config(page_title="Retirement Paycheck Dashboard", page_icon="💵", layout="wide")
+st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-05-15-revert-proof-loader-v4"
+APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1-visual-polish-v7-percent-cards-icons-fixed-save-floor-repair"
+STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
 REALISTIC_INCOME_FACTOR = 0.843
@@ -33,9 +34,9 @@ LEGACY_STATE_FILE = APP_DIR / "retirement_dashboard_state.json"
 LEGACY_BACKUP_FILE = APP_DIR / "retirement_dashboard_state_backup.json"
 LEGACY_LAST_GOOD_FILE = APP_DIR / "retirement_dashboard_state_last_good.json"
 
-DEFAULT_CASH_FDRXX = 53690.85
-DEFAULT_TOTAL_CONTRIBUTIONS = 396299.07
-EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K = 396299.07
+DEFAULT_CASH_FDRXX = 93690.85
+DEFAULT_TOTAL_CONTRIBUTIONS = 436299.07
+CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS = 436299.07
 
 DEFAULT_COLUMNS = [
     "ticker", "qty", "avg_cost", "manual_price", "target_weight",
@@ -136,15 +137,17 @@ def get_default_portfolio_df() -> pd.DataFrame:
 def baseline_state_payload() -> dict:
     now = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
     return {
+        "state_schema_version": STATE_SCHEMA_VERSION,
         "app_baseline_version": APP_BASELINE_VERSION,
         "portfolio_df": get_default_portfolio_df(),
         "cash_fdrxx": DEFAULT_CASH_FDRXX,
         "total_contributions": DEFAULT_TOTAL_CONTRIBUTIONS,
+        "protected_min_contributions": DEFAULT_TOTAL_CONTRIBUTIONS,
         "use_live_prices": True,
         "auto_sync_prices": True,
         "last_price_sync": "",
         "last_saved": now,
-        "last_deploy_message": "Loaded protected post-$30,000 Fidelity production baseline.",
+        "last_deploy_message": "Loaded current protected full-snapshot production baseline.",
         "last_cash_message": f"FDRXX cash baseline: {format_dollars(DEFAULT_CASH_FDRXX)}.",
     }
 
@@ -153,11 +156,23 @@ def normalize_state_payload(raw: dict) -> dict:
     records = raw.get("portfolio_df", raw.get("portfolio", []))
     portfolio_df = normalize_portfolio_df(pd.DataFrame(records)) if records else get_default_portfolio_df()
 
+    schema_version = int(to_float(raw.get("state_schema_version", 1), 1))
+    total_contributions = round_money(
+        to_float(raw.get("total_contributions", DEFAULT_TOTAL_CONTRIBUTIONS), DEFAULT_TOTAL_CONTRIBUTIONS)
+    )
+
+    if "protected_min_contributions" in raw:
+        protected_min = round_money(to_float(raw.get("protected_min_contributions"), total_contributions))
+    else:
+        protected_min = total_contributions
+
     return {
+        "state_schema_version": schema_version,
         "app_baseline_version": raw.get("app_baseline_version", ""),
         "portfolio_df": portfolio_df,
         "cash_fdrxx": round_money(to_float(raw.get("cash_fdrxx", raw.get("cash", DEFAULT_CASH_FDRXX)), DEFAULT_CASH_FDRXX)),
-        "total_contributions": round_money(to_float(raw.get("total_contributions", DEFAULT_TOTAL_CONTRIBUTIONS), DEFAULT_TOTAL_CONTRIBUTIONS)),
+        "total_contributions": total_contributions,
+        "protected_min_contributions": protected_min,
         "use_live_prices": bool(raw.get("use_live_prices", True)),
         "auto_sync_prices": bool(raw.get("auto_sync_prices", True)),
         "last_price_sync": str(raw.get("last_price_sync", "")),
@@ -197,11 +212,21 @@ def make_payload_from_state(state: dict, force_timestamp: bool = False) -> dict:
     if force_timestamp or saved_time.strip() == "":
         saved_time = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
 
+    total_contributions = round_money(state["total_contributions"])
+    protected_min = round_money(
+        state.get(
+            "protected_min_contributions",
+            max(total_contributions, CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS),
+        )
+    )
+
     return {
+        "state_schema_version": STATE_SCHEMA_VERSION,
         "app_baseline_version": APP_BASELINE_VERSION,
         "portfolio_df": df.to_dict(orient="records"),
         "cash_fdrxx": round_money(state["cash_fdrxx"]),
-        "total_contributions": round_money(state["total_contributions"]),
+        "total_contributions": total_contributions,
+        "protected_min_contributions": protected_min,
         "use_live_prices": bool(state.get("use_live_prices", True)),
         "auto_sync_prices": bool(state.get("auto_sync_prices", True)),
         "last_price_sync": str(state.get("last_price_sync", "")),
@@ -211,28 +236,40 @@ def make_payload_from_state(state: dict, force_timestamp: bool = False) -> dict:
     }
 
 
-def state_score(item: dict) -> tuple:
+def candidate_sort_key(item: dict) -> tuple:
     return (
-        round_money(item["total_contributions"]),
-        round_money(item["cash_fdrxx"]),
+        1 if item["state"].get("state_schema_version", 1) >= STATE_SCHEMA_VERSION else 0,
         item["last_saved_dt"],
+        round_money(item["state"].get("total_contributions", 0.0)),
     )
+
+
+def is_candidate_valid(item: dict) -> bool:
+    state = item["state"]
+    schema_version = int(state.get("state_schema_version", 1))
+    total = round_money(state.get("total_contributions", 0.0))
+    protected_min = round_money(state.get("protected_min_contributions", total))
+
+    if schema_version < STATE_SCHEMA_VERSION:
+        return total >= CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS
+
+    return total >= protected_min
 
 
 def write_payload_everywhere(payload: dict) -> None:
     write_json_atomic(STATE_FILE, payload)
     write_json_atomic(BACKUP_FILE, payload)
+    write_json_atomic(LAST_GOOD_FILE, payload)
+
     write_json_atomic(LEGACY_STATE_FILE, payload)
     write_json_atomic(LEGACY_BACKUP_FILE, payload)
-
-    if round_money(payload.get("total_contributions", 0.0)) >= EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K:
-        write_json_atomic(LAST_GOOD_FILE, payload)
-        write_json_atomic(LEGACY_LAST_GOOD_FILE, payload)
+    write_json_atomic(LEGACY_LAST_GOOD_FILE, payload)
 
 
 def load_state() -> dict:
     errors = []
     candidates = []
+    rejected = []
 
     for path in candidate_state_files():
         if not path.exists():
@@ -241,32 +278,50 @@ def load_state() -> dict:
         try:
             raw = read_json_file(path)
             loaded = normalize_state_payload(raw)
-            candidates.append(
-                {
-                    "path": path,
-                    "state": loaded,
-                    "last_saved_dt": parse_saved_time(loaded.get("last_saved", "")),
-                    "total_contributions": round_money(loaded.get("total_contributions", 0.0)),
-                    "cash_fdrxx": round_money(loaded.get("cash_fdrxx", 0.0)),
-                }
-            )
+            item = {
+                "path": path,
+                "state": loaded,
+                "last_saved_dt": parse_saved_time(loaded.get("last_saved", "")),
+            }
+
+            if is_candidate_valid(item):
+                candidates.append(item)
+            else:
+                rejected.append(
+                    f"{path} | rejected stale/unsafe | contributions {format_dollars(loaded.get('total_contributions', 0.0))} | "
+                    f"protected floor {format_dollars(loaded.get('protected_min_contributions', 0.0))} | "
+                    f"schema {loaded.get('state_schema_version', 1)} | saved {loaded.get('last_saved', '') or 'unknown'}"
+                )
         except Exception as exc:
             errors.append(f"{path}: {exc}")
 
     if candidates:
-        best = sorted(candidates, key=state_score, reverse=True)[0]
+        best = sorted(candidates, key=candidate_sort_key, reverse=True)[0]
         loaded = best["state"]
-        payload = make_payload_from_state(loaded, force_timestamp=True)
 
+        if int(loaded.get("state_schema_version", 1)) < STATE_SCHEMA_VERSION:
+            loaded["protected_min_contributions"] = max(
+                round_money(loaded.get("total_contributions", 0.0)),
+                CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS,
+            )
+
+        payload = make_payload_from_state(loaded, force_timestamp=True)
         loaded["app_baseline_version"] = APP_BASELINE_VERSION
-        loaded["_loaded_from"] = f"BEST SAVED FILE SELECTED: {best['path']}"
+        loaded["state_schema_version"] = STATE_SCHEMA_VERSION
+        loaded["protected_min_contributions"] = payload["protected_min_contributions"]
+        loaded["_loaded_from"] = f"BEST VALID FULL SNAPSHOT SELECTED: {best['path']}"
         loaded["_version_mismatch_fixed"] = True
         loaded["_active_state_file"] = str(STATE_FILE)
         loaded["_load_errors"] = errors
         loaded["_candidate_summary"] = [
-            f"{c['path']} | contributions {format_dollars(c['total_contributions'])} | cash {format_dollars(c['cash_fdrxx'])} | saved {c['state'].get('last_saved', '') or 'unknown'}"
+            f"{c['path']} | schema {c['state'].get('state_schema_version', 1)} | "
+            f"contributions {format_dollars(c['state'].get('total_contributions', 0.0))} | "
+            f"protected floor {format_dollars(c['state'].get('protected_min_contributions', 0.0))} | "
+            f"cash {format_dollars(c['state'].get('cash_fdrxx', 0.0))} | "
+            f"saved {c['state'].get('last_saved', '') or 'unknown'}"
             for c in candidates
         ]
+        loaded["_rejected_summary"] = rejected
 
         write_payload_everywhere(payload)
 
@@ -277,22 +332,33 @@ def load_state() -> dict:
     payload = make_payload_from_state(state, force_timestamp=True)
     write_payload_everywhere(payload)
 
-    state["_loaded_from"] = "PROTECTED POST-$30K BASELINE - no readable saved or backup file found"
+    state["_loaded_from"] = "CURRENT PROTECTED FULL-SNAPSHOT BASELINE - no valid saved file found"
     state["_version_mismatch_fixed"] = False
     state["_active_state_file"] = str(STATE_FILE)
     state["_load_errors"] = errors
     state["_candidate_summary"] = []
+    state["_rejected_summary"] = rejected
     state["last_saved"] = payload["last_saved"]
     return state
 
 
 def make_state_payload() -> dict:
     df = normalize_portfolio_df(st.session_state.portfolio_df.copy())
+    total_contributions = round_money(st.session_state.total_contributions)
+    protected_min = round_money(
+        st.session_state.get(
+            "protected_min_contributions",
+            max(total_contributions, CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS),
+        )
+    )
+
     return {
+        "state_schema_version": STATE_SCHEMA_VERSION,
         "app_baseline_version": APP_BASELINE_VERSION,
         "portfolio_df": df.to_dict(orient="records"),
         "cash_fdrxx": round_money(st.session_state.cash_fdrxx),
-        "total_contributions": round_money(st.session_state.total_contributions),
+        "total_contributions": total_contributions,
+        "protected_min_contributions": protected_min,
         "use_live_prices": bool(st.session_state.use_live_prices),
         "auto_sync_prices": bool(st.session_state.auto_sync_prices),
         "last_price_sync": str(st.session_state.last_price_sync),
@@ -302,29 +368,44 @@ def make_state_payload() -> dict:
     }
 
 
+def get_existing_protected_floor() -> float:
+    floors = [CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS]
+
+    for path in candidate_state_files():
+        if not path.exists():
+            continue
+        try:
+            existing_norm = normalize_state_payload(read_json_file(path))
+            floors.append(round_money(existing_norm.get("protected_min_contributions", existing_norm.get("total_contributions", 0.0))))
+            floors.append(round_money(existing_norm.get("total_contributions", 0.0)))
+        except Exception:
+            pass
+
+    floors.append(round_money(st.session_state.get("protected_min_contributions", CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS)))
+    return round_money(max(floors))
+
+
 def save_state() -> bool:
     try:
         payload = make_state_payload()
 
-        existing_candidates = []
-        for path in candidate_state_files():
-            if not path.exists():
-                continue
-            try:
-                existing_norm = normalize_state_payload(read_json_file(path))
-                existing_candidates.append(existing_norm)
-            except Exception:
-                pass
+        existing_floor = get_existing_protected_floor()
+        current_total = round_money(payload["total_contributions"])
+        authorized_reduction = bool(st.session_state.get("authorize_contribution_reduction_once", False))
 
-        for existing_norm in existing_candidates:
-            if (
-                round_money(payload["total_contributions"]) < round_money(existing_norm["total_contributions"])
-                and round_money(existing_norm["total_contributions"]) >= EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K
-            ):
-                raise RuntimeError(
-                    "Protected save blocked: current screen has lower contributions than an existing saved file. "
-                    "Use Reload Best Saved File or restore the latest snapshot before saving."
-                )
+        if current_total < existing_floor and not authorized_reduction:
+            # Auto-repair stale contribution totals caused by older saved state files.
+            # This keeps holdings/cash edits saveable without weakening the intentional
+            # reduction protection in the Total Contributions form.
+            current_total = existing_floor
+            st.session_state.total_contributions = current_total
+            payload["total_contributions"] = current_total
+
+        if authorized_reduction:
+            payload["protected_min_contributions"] = current_total
+            st.session_state.authorize_contribution_reduction_once = False
+        else:
+            payload["protected_min_contributions"] = round_money(max(existing_floor, current_total))
 
         write_payload_everywhere(payload)
 
@@ -333,9 +414,12 @@ def save_state() -> bool:
             raise RuntimeError("Save verification failed: cash did not match after write.")
         if round_money(verify.get("total_contributions", -1)) != round_money(payload["total_contributions"]):
             raise RuntimeError("Save verification failed: contributions did not match after write.")
+        if round_money(verify.get("protected_min_contributions", -1)) != round_money(payload["protected_min_contributions"]):
+            raise RuntimeError("Save verification failed: protected floor did not match after write.")
 
+        st.session_state.protected_min_contributions = payload["protected_min_contributions"]
         st.session_state.last_saved = payload["last_saved"]
-        st.session_state.loaded_from = f"CURRENT SESSION - saved successfully to {STATE_FILE} and root backup files"
+        st.session_state.loaded_from = f"CURRENT FULL SNAPSHOT - saved successfully to all state and backup files"
         st.session_state.last_save_error = ""
         return True
 
@@ -358,6 +442,9 @@ def apply_state_dict(state: dict, message: str = "") -> None:
     st.session_state.editor_df = normalize_portfolio_df(state["portfolio_df"].copy())
     st.session_state.cash_fdrxx = round_money(state["cash_fdrxx"])
     st.session_state.total_contributions = round_money(state["total_contributions"])
+    st.session_state.protected_min_contributions = round_money(
+        state.get("protected_min_contributions", max(st.session_state.total_contributions, CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS))
+    )
     st.session_state.use_live_prices = bool(state.get("use_live_prices", True))
     st.session_state.auto_sync_prices = bool(state.get("auto_sync_prices", True))
     st.session_state.last_price_sync = state.get("last_price_sync", "")
@@ -369,10 +456,12 @@ def apply_state_dict(state: dict, message: str = "") -> None:
 
 def build_session_start_payload_from_loaded_state() -> dict:
     return {
+        "state_schema_version": STATE_SCHEMA_VERSION,
         "app_baseline_version": APP_BASELINE_VERSION,
         "portfolio_df": normalize_portfolio_df(st.session_state.portfolio_df).to_dict(orient="records"),
         "cash_fdrxx": round_money(st.session_state.cash_fdrxx),
         "total_contributions": round_money(st.session_state.total_contributions),
+        "protected_min_contributions": round_money(st.session_state.protected_min_contributions),
         "use_live_prices": bool(st.session_state.use_live_prices),
         "auto_sync_prices": bool(st.session_state.auto_sync_prices),
         "last_price_sync": str(st.session_state.last_price_sync),
@@ -392,6 +481,9 @@ def init_state() -> None:
     st.session_state.editor_df = normalize_portfolio_df(loaded["portfolio_df"].copy())
     st.session_state.cash_fdrxx = round_money(loaded["cash_fdrxx"])
     st.session_state.total_contributions = round_money(loaded["total_contributions"])
+    st.session_state.protected_min_contributions = round_money(
+        loaded.get("protected_min_contributions", max(st.session_state.total_contributions, CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS))
+    )
     st.session_state.use_live_prices = bool(loaded.get("use_live_prices", True))
     st.session_state.auto_sync_prices = bool(loaded.get("auto_sync_prices", True))
     st.session_state.last_price_sync = loaded.get("last_price_sync", "")
@@ -399,6 +491,7 @@ def init_state() -> None:
     st.session_state.last_deploy_message = loaded.get("last_deploy_message", "")
     st.session_state.last_cash_message = loaded.get("last_cash_message", "")
     st.session_state.last_save_error = ""
+    st.session_state.authorize_contribution_reduction_once = False
     st.session_state.editor_version = 0
     st.session_state.app_initialized = True
 
@@ -407,6 +500,7 @@ def init_state() -> None:
     st.session_state.active_state_file = str(STATE_FILE)
     st.session_state.load_errors = loaded.get("_load_errors", [])
     st.session_state.candidate_summary = loaded.get("_candidate_summary", [])
+    st.session_state.rejected_summary = loaded.get("_rejected_summary", [])
     st.session_state.session_start_payload = build_session_start_payload_from_loaded_state()
 
 
@@ -575,6 +669,9 @@ def add_new_money(amount: float) -> None:
 
     st.session_state.cash_fdrxx = round_money(st.session_state.cash_fdrxx + amount)
     st.session_state.total_contributions = round_money(st.session_state.total_contributions + amount)
+    st.session_state.protected_min_contributions = round_money(
+        max(st.session_state.protected_min_contributions, st.session_state.total_contributions)
+    )
     st.session_state.last_cash_message = f"Added new money: {format_dollars(amount)} to FDRXX."
     save_state()
 
@@ -716,39 +813,414 @@ def inject_dashboard_css() -> None:
     st.markdown(
         """
         <style>
-        .main .block-container { padding-top: 1.1rem; padding-bottom: 2rem; max-width: 1400px; }
-        .dashboard-title { font-size: 2.25rem; font-weight: 900; margin-bottom: 0.15rem; color: #0f172a; }
-        .dashboard-subtitle { color: #64748b; font-size: 1.02rem; margin-bottom: 1.0rem; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+
+        html, body, [class*="css"], .stApp {
+            font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+
+        .main .block-container {
+            padding-top: 1.05rem;
+            padding-bottom: 2rem;
+            max-width: 1420px;
+        }
+
+        .dashboard-title {
+            font-size: 2.25rem;
+            font-weight: 900;
+            margin-bottom: 0.1rem;
+            color: #0f172a;
+            letter-spacing: -0.04em;
+        }
+
+        .dashboard-subtitle {
+            color: #64748b;
+            font-size: 1.02rem;
+            margin-bottom: 1.0rem;
+            font-weight: 500;
+        }
+
         .hero-card {
-            border-radius: 24px; padding: 26px 28px; margin: 10px 0 18px 0;
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #334155 100%);
-            color: #ffffff !important; box-shadow: 0 14px 30px rgba(15, 23, 42, 0.22);
+            border-radius: 28px;
+            padding: 30px 32px;
+            margin: 10px 0 16px 0;
+            background:
+                radial-gradient(circle at 92% 12%, rgba(34, 197, 94, 0.34) 0%, rgba(34, 197, 94, 0.04) 30%, transparent 48%),
+                linear-gradient(135deg, #020617 0%, #0f172a 46%, #1e3a8a 100%);
+            color: #ffffff !important;
+            box-shadow: 0 24px 58px rgba(15, 23, 42, 0.30);
+            border: 1px solid rgba(255,255,255,0.14);
+            overflow: hidden;
         }
-        .hero-card * { color: #ffffff !important; }
-        .hero-label { font-size: 0.90rem; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.82; margin-bottom: 4px; }
-        .hero-number { font-size: 2.7rem; font-weight: 900; margin: 2px 0 2px 0; }
-        .hero-small { opacity: 0.92; font-size: 1.0rem; margin-top: 4px; }
-        .paycheck-bar-wrap { margin-top: 18px; background: rgba(255,255,255,0.18); border-radius: 999px; height: 22px; overflow: hidden; }
-        .paycheck-bar-fill { height: 22px; background: linear-gradient(90deg, #22c55e, #84cc16); border-radius: 999px; }
-        .metric-card {
-            border-radius: 18px; padding: 18px 18px 16px 18px;
-            border: 1px solid rgba(148, 163, 184, 0.35);
-            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.07);
-            margin-bottom: 12px; min-height: 118px;
+
+        .hero-card * {
+            color: #ffffff !important;
         }
-        .metric-blue { background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); }
-        .metric-purple { background: linear-gradient(135deg, #faf5ff 0%, #ede9fe 100%); }
-        .metric-green { background: linear-gradient(135deg, #ecfdf5 0%, #dcfce7 100%); }
-        .metric-amber { background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); }
-        .metric-gray { background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); }
-        .metric-label { color: #334155 !important; font-size: 0.88rem; font-weight: 800; margin-bottom: 6px; }
-        .metric-value { color: #0f172a !important; font-size: 1.55rem; font-weight: 900; line-height: 1.15; }
-        .metric-note { color: #475569 !important; font-size: 0.82rem; margin-top: 7px; }
-        .section-title { font-size: 1.35rem; font-weight: 900; margin-bottom: 2px; color: #0f172a; }
-        .section-subtitle { color: #64748b; font-size: 0.93rem; margin-bottom: 12px; }
+
+        .hero-label {
+            font-size: 0.78rem;
+            letter-spacing: 0.13em;
+            text-transform: uppercase;
+            opacity: 0.84;
+            margin-bottom: 4px;
+            font-weight: 900;
+        }
+
+        .hero-number {
+            font-size: 3.05rem;
+            font-weight: 950;
+            margin: 2px 0 2px 0;
+            letter-spacing: -0.06em;
+        }
+
+        .hero-small {
+            opacity: 0.94;
+            font-size: 1.0rem;
+            margin-top: 5px;
+            font-weight: 600;
+        }
+
+        .paycheck-bar-wrap {
+            margin-top: 19px;
+            background: rgba(255,255,255,0.18);
+            border-radius: 999px;
+            height: 24px;
+            overflow: hidden;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.22);
+        }
+
+        .paycheck-bar-fill {
+            height: 24px;
+            background: linear-gradient(90deg, #22c55e, #bef264);
+            border-radius: 999px;
+            box-shadow: 0 0 22px rgba(34,197,94,0.45);
+        }
+
+        .funding-card {
+            position: relative;
+            border-radius: 30px;
+            padding: 27px 31px 26px 31px;
+            margin: 0 0 22px 0;
+            background:
+                radial-gradient(circle at 88% 18%, rgba(96,165,250,0.36) 0%, rgba(96,165,250,0.08) 34%, transparent 54%),
+                linear-gradient(135deg, #020617 0%, #0f172a 46%, #1e3a8a 100%);
+            color: #ffffff !important;
+            border: 1px solid rgba(255,255,255,0.14);
+            box-shadow: 0 26px 62px rgba(15, 23, 42, 0.30);
+            overflow: hidden;
+        }
+
+        .funding-card:after {
+            content: "";
+            position: absolute;
+            width: 220px;
+            height: 220px;
+            right: -88px;
+            top: -98px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.08);
+            pointer-events: none;
+        }
+
+        .funding-card * {
+            color: #ffffff !important;
+            position: relative;
+            z-index: 2;
+        }
+
+        .funding-topline {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            align-items: flex-start;
+            flex-wrap: wrap;
+        }
+
+        .funding-label {
+            color: #ffffff !important;
+            font-size: 0.78rem;
+            font-weight: 950;
+            letter-spacing: 0.13em;
+            text-transform: uppercase;
+            opacity: 0.84;
+        }
+
+        .funding-number {
+            color: #ffffff !important;
+            font-size: 2.35rem;
+            font-weight: 950;
+            line-height: 1.04;
+            letter-spacing: -0.06em;
+            margin-top: 7px;
+        }
+
+        .funding-pill {
+            background: rgba(255,255,255,0.14);
+            color: #ffffff !important;
+            border: 1px solid rgba(255,255,255,0.18);
+            border-radius: 999px;
+            padding: 8px 13px;
+            font-size: 0.88rem;
+            font-weight: 950;
+            box-shadow: 0 10px 22px rgba(0,0,0,0.16);
+            backdrop-filter: blur(10px);
+        }
+
+        .funding-note {
+            color: #ffffff !important;
+            font-size: 0.95rem;
+            margin-top: 12px;
+            line-height: 1.38;
+            font-weight: 650;
+            opacity: 0.88;
+        }
+
+        .funding-bar-wrap {
+            margin-top: 16px;
+            background: rgba(255,255,255,0.18);
+            border-radius: 999px;
+            height: 18px;
+            overflow: hidden;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.22);
+        }
+
+        .funding-bar-fill {
+            height: 18px;
+            background: linear-gradient(90deg, #22c55e, #bef264);
+            border-radius: 999px;
+            box-shadow: 0 0 22px rgba(34,197,94,0.45);
+        }
+
+        .main-value-card {
+            position: relative;
+            border-radius: 30px;
+            padding: 31px 34px;
+            margin: 10px 0 18px 0;
+            background:
+                radial-gradient(circle at 88% 18%, rgba(96,165,250,0.36) 0%, rgba(96,165,250,0.08) 34%, transparent 54%),
+                linear-gradient(135deg, #020617 0%, #0f172a 46%, #1e3a8a 100%);
+            color: #ffffff !important;
+            box-shadow: 0 26px 62px rgba(15, 23, 42, 0.30);
+            border: 1px solid rgba(255,255,255,0.14);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            overflow: hidden;
+        }
+
+        .main-value-card:after {
+            content: "";
+            position: absolute;
+            width: 240px;
+            height: 240px;
+            right: -90px;
+            top: -100px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.08);
+            pointer-events: none;
+        }
+
+        .main-value-left {
+            position: relative;
+            z-index: 2;
+        }
+
+        .main-value-label {
+            color: #ffffff !important;
+            font-size: 0.82rem;
+            text-transform: uppercase;
+            letter-spacing: 0.13em;
+            font-weight: 950;
+            opacity: 0.84;
+        }
+
+        .main-value-number {
+            color: #ffffff !important;
+            font-size: 3.55rem;
+            font-weight: 950;
+            letter-spacing: -0.065em;
+            line-height: 1.0;
+            margin-top: 8px;
+        }
+
+        .main-value-note {
+            color: #ffffff !important;
+            font-size: 1rem;
+            opacity: 0.88;
+            margin-top: 9px;
+            font-weight: 650;
+        }
+
+        .main-value-icon {
+            position: relative;
+            z-index: 2;
+            width: 82px;
+            height: 82px;
+            min-width: 82px;
+            border-radius: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255,255,255,0.14);
+            border: 1px solid rgba(255,255,255,0.18);
+            box-shadow: 0 14px 30px rgba(0,0,0,0.18);
+            font-size: 3.25rem;
+        }
+
+        .premium-metric-card {
+            position: relative;
+            border-radius: 24px;
+            padding: 22px 24px 21px 25px;
+            min-height: 150px;
+            margin-bottom: 18px;
+            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+            color: #0f172a !important;
+            box-shadow: 0 14px 34px rgba(15, 23, 42, 0.12);
+            border: 1px solid rgba(148,163,184,0.28);
+            overflow: hidden;
+        }
+
+        .premium-metric-card * {
+            color: inherit !important;
+        }
+
+        .premium-metric-card:after {
+            content: "";
+            position: absolute;
+            width: 190px;
+            height: 190px;
+            right: -84px;
+            top: -92px;
+            border-radius: 999px;
+            background: rgba(59,130,246,0.07);
+            pointer-events: none;
+        }
+
+        .premium-accent {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 7px;
+            height: 100%;
+        }
+
+        .premium-accent.blue { background: linear-gradient(180deg, #60a5fa, #2563eb); }
+        .premium-accent.green { background: linear-gradient(180deg, #4ade80, #16a34a); }
+        .premium-accent.purple { background: linear-gradient(180deg, #c084fc, #7c3aed); }
+        .premium-accent.amber { background: linear-gradient(180deg, #fbbf24, #d97706); }
+        .premium-accent.gray { background: linear-gradient(180deg, #94a3b8, #475569); }
+
+        .metric-blue {
+            background: linear-gradient(180deg, #ffffff 0%, #eff6ff 100%);
+        }
+
+        .metric-green {
+            background: linear-gradient(180deg, #ffffff 0%, #ecfdf5 100%);
+        }
+
+        .metric-purple {
+            background: linear-gradient(180deg, #ffffff 0%, #faf5ff 100%);
+        }
+
+        .metric-amber {
+            background: linear-gradient(180deg, #ffffff 0%, #fffbeb 100%);
+        }
+
+        .metric-gray {
+            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+        }
+
+        .premium-card-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 18px;
+            position: relative;
+            z-index: 2;
+        }
+
+        .premium-label {
+            color: #475569 !important;
+            font-size: 0.76rem;
+            font-weight: 950;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+        }
+
+        .premium-value {
+            color: #0f172a !important;
+            font-size: 2.05rem;
+            font-weight: 950;
+            letter-spacing: -0.055em;
+            line-height: 1.05;
+            margin-top: 10px;
+            white-space: nowrap;
+        }
+
+        .premium-percent {
+            display: inline-flex;
+            align-items: center;
+            width: fit-content;
+            margin-top: 11px;
+            padding: 5px 10px;
+            border-radius: 999px;
+            background: rgba(15,23,42,0.06);
+            border: 1px solid rgba(148,163,184,0.24);
+            color: #334155 !important;
+            font-size: 0.82rem;
+            font-weight: 850;
+            line-height: 1.1;
+            letter-spacing: -0.01em;
+        }
+
+        .premium-note {
+            color: #64748b !important;
+            font-size: 0.92rem;
+            font-weight: 650;
+            margin-top: 13px;
+            line-height: 1.35;
+            position: relative;
+            z-index: 2;
+        }
+
+        .premium-icon {
+            width: 54px;
+            height: 54px;
+            min-width: 54px;
+            border-radius: 19px;
+            background: rgba(15,23,42,0.06);
+            border: 1px solid rgba(148,163,184,0.26);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.95rem;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.85);
+        }
+
+        .section-title {
+            font-size: 1.34rem;
+            font-weight: 900;
+            margin-bottom: 2px;
+            color: #0f172a;
+            letter-spacing: -0.035em;
+        }
+
+        .section-subtitle {
+            color: #64748b;
+            font-size: 0.95rem;
+            margin-bottom: 13px;
+            font-weight: 500;
+        }
+
         .status-pill {
-            display: inline-block; border-radius: 999px; padding: 5px 11px; font-size: 0.82rem; font-weight: 750;
-            background: #ecfdf5; color: #047857 !important; border: 1px solid #bbf7d0;
+            display: inline-block;
+            border-radius: 999px;
+            padding: 6px 12px;
+            font-size: 0.82rem;
+            font-weight: 800;
+            background: #ecfdf5;
+            color: #047857 !important;
+            border: 1px solid #bbf7d0;
         }
         </style>
         """,
@@ -756,32 +1228,54 @@ def inject_dashboard_css() -> None:
     )
 
 
-def render_card(icon: str, label: str, value: str, note: str = "") -> None:
+def render_card(icon: str, label: str, value: str, percent_text: str = "", note: str = "") -> None:
     label_lower = label.lower()
 
     if any(word in label_lower for word in ["cash", "fdrxx", "deploy"]):
         tone = "metric-green"
-    elif any(word in label_lower for word in ["income", "goal", "conservative", "realistic"]):
-        tone = "metric-purple"
+        accent = "green"
+        default_icon = "&#128181;"
     elif any(word in label_lower for word in ["gain", "profit", "loss"]):
         tone = "metric-amber"
-    elif any(word in label_lower for word in ["value", "basis", "contribution", "holdings"]):
+        accent = "amber"
+        default_icon = "&#128200;"
+    elif any(word in label_lower for word in ["basis", "cost"]):
+        tone = "metric-purple"
+        accent = "purple"
+        default_icon = "&#127919;"
+    elif any(word in label_lower for word in ["holdings"]):
         tone = "metric-blue"
+        accent = "blue"
+        default_icon = "&#128202;"
+    elif any(word in label_lower for word in ["value", "contribution", "net"]):
+        tone = "metric-blue"
+        accent = "blue"
+        default_icon = "&#127974;"
     else:
         tone = "metric-gray"
+        accent = "gray"
+        default_icon = "&#8226;"
+
+    display_icon = icon or default_icon
+    percent_html = f'<div class="premium-percent">{percent_text}</div>' if percent_text else ""
 
     st.markdown(
         f"""
-        <div class="metric-card {tone}">
-            <div style="font-size:1.25rem;margin-bottom:4px;">{icon}</div>
-            <div class="metric-label">{label}</div>
-            <div class="metric-value">{value}</div>
-            <div class="metric-note">{note}</div>
+        <div class="premium-metric-card {tone}">
+            <div class="premium-accent {accent}"></div>
+            <div class="premium-card-top">
+                <div>
+                    <div class="premium-label">{label}</div>
+                    <div class="premium-value">{value}</div>
+                    {percent_html}
+                </div>
+                <div class="premium-icon">{display_icon}</div>
+            </div>
+            <div class="premium-note">{note}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-
 
 def render_section_header(title: str, subtitle: str = "") -> None:
     st.markdown(
@@ -797,6 +1291,7 @@ def render_state_health_box() -> None:
     loaded_from = st.session_state.get("loaded_from", "UNKNOWN")
     cash = st.session_state.get("cash_fdrxx", 0.0)
     contributions = st.session_state.get("total_contributions", 0.0)
+    protected_floor = st.session_state.get("protected_min_contributions", 0.0)
     last_saved = st.session_state.get("last_saved", "") or "not saved yet"
 
     state_exists = STATE_FILE.exists()
@@ -806,16 +1301,17 @@ def render_state_health_box() -> None:
     legacy_backup_exists = LEGACY_BACKUP_FILE.exists()
 
     good_loader = (
-        "BEST SAVED FILE" in loaded_from
-        or "CURRENT SESSION" in loaded_from
+        "BEST VALID FULL SNAPSHOT" in loaded_from
+        or "CURRENT FULL SNAPSHOT" in loaded_from
         or "UPLOADED SNAPSHOT" in loaded_from
-        or "PROTECTED POST-$30K" in loaded_from
+        or "CURRENT PROTECTED FULL-SNAPSHOT BASELINE" in loaded_from
     )
 
     message = (
         f"State loaded from: {loaded_from}\n\n"
         f"Cash: {format_dollars(cash)} | "
         f"Contributions: {format_dollars(contributions)} | "
+        f"Protected floor: {format_dollars(protected_floor)} | "
         f"Last saved: {last_saved}"
     )
 
@@ -824,16 +1320,16 @@ def render_state_health_box() -> None:
     else:
         st.error(message)
 
-    if round_money(contributions) < EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K:
+    if round_money(contributions) < round_money(protected_floor):
         st.error(
-            f"🚨 Contributions are below the expected post-$30,000 number. "
-            f"Loaded: {format_dollars(contributions)} | Expected around: {format_dollars(EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K)}. "
-            f"Restore yesterday's snapshot before making new saves."
+            f"Contributions are below the protected floor. "
+            f"Loaded: {format_dollars(contributions)} | Protected floor: {format_dollars(protected_floor)}. "
+            f"Do not save unless this was an intentional contribution reduction."
         )
     else:
         st.info(
-            f"✅ Contribution check passed: {format_dollars(contributions)} "
-            f"is at or above the expected post-$30,000 level."
+            f"Full-snapshot protection passed: contributions {format_dollars(contributions)} "
+            f"are at or above the protected floor {format_dollars(protected_floor)}."
         )
 
     st.caption(f"Active save file: {STATE_FILE}")
@@ -843,11 +1339,16 @@ def render_state_health_box() -> None:
     )
 
     if st.session_state.get("version_mismatch_fixed", False):
-        st.info("Smart loader checked all saved files and copied the strongest available state into every backup location.")
+        st.info("Smart loader copied the best valid full snapshot into every save and backup location.")
 
     if st.session_state.get("candidate_summary"):
-        with st.expander("Saved files checked by smart loader"):
+        with st.expander("Valid full snapshots checked by smart loader"):
             for item in st.session_state.candidate_summary:
+                st.write(item)
+
+    if st.session_state.get("rejected_summary"):
+        with st.expander("Rejected stale or unsafe saved files"):
+            for item in st.session_state.rejected_summary:
                 st.write(item)
 
     if st.session_state.get("load_errors"):
@@ -868,14 +1369,56 @@ def render_paycheck_hero(calc: dict) -> None:
             <div class="hero-label">Regular Production App</div>
             <div class="hero-number">{format_dollars(realistic)} / {format_dollars(GOAL_MONTHLY)}</div>
             <div class="hero-small">
-                Realistic monthly income estimate • {format_percent(progress_pct)} of your goal
+                Realistic monthly income estimate &#8226; {format_percent(progress_pct)} of your goal
             </div>
             <div class="paycheck-bar-wrap">
                 <div class="paycheck-bar-fill" style="width: {progress_pct:.1f}%;"></div>
             </div>
             <div class="hero-small" style="margin-top: 14px;">
-                🛡️ Conservative: {format_dollars(conservative)} &nbsp;&nbsp;|&nbsp;&nbsp;
-                📈 Actual estimate: {format_dollars(actual)}
+                Conservative: {format_dollars(conservative)} &nbsp;&nbsp;|&nbsp;&nbsp;
+                Actual estimate: {format_dollars(actual)}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_funding_goal_card(calc: dict) -> None:
+    holdings_value = float(calc.get("holdings_market_value", 0.0))
+    realistic_income = float(calc.get("monthly_realistic", 0.0))
+
+    if holdings_value > 0 and realistic_income > 0:
+        realistic_income_rate = realistic_income / holdings_value
+        estimated_needed = GOAL_MONTHLY / realistic_income_rate if realistic_income_rate > 0 else 0.0
+        funded_pct = holdings_value / estimated_needed if estimated_needed > 0 else 0.0
+    else:
+        estimated_needed = 0.0
+        funded_pct = 0.0
+
+    progress_pct = max(0.0, min(funded_pct * 100.0, 100.0))
+
+    if estimated_needed > 0:
+        needed_text = format_dollars(estimated_needed)
+        main_text = f"{format_dollars(holdings_value)} / {needed_text}"
+    else:
+        main_text = f"{format_dollars(holdings_value)} / calculating..."
+
+    st.markdown(
+        f"""
+        <div class="funding-card">
+            <div class="funding-topline">
+                <div>
+                    <div class="funding-label">Income Machine Funding Goal</div>
+                    <div class="funding-number">{main_text}</div>
+                </div>
+                <div class="funding-pill">{format_percent(progress_pct)} funded</div>
+            </div>
+            <div class="funding-bar-wrap">
+                <div class="funding-bar-fill" style="width: {progress_pct:.1f}%;"></div>
+            </div>
+            <div class="funding-note">
+                Estimated invested holdings needed to generate {format_dollars(GOAL_MONTHLY)}/month at the current realistic income rate. Based on invested holdings only; deploying FDRXX cash increases progress.
             </div>
         </div>
         """,
@@ -885,34 +1428,76 @@ def render_paycheck_hero(calc: dict) -> None:
 
 def render_metrics(calc: dict) -> None:
     render_paycheck_hero(calc)
+    render_funding_goal_card(calc)
 
     render_section_header(
-        "📊 Account Command Center",
+        "Account Overview",
         "Cash, total value, cost basis, and gains are separated clearly."
     )
 
-    m1, m2 = st.columns(2)
-    with m1:
-        render_card("💼", "Total Account Value", format_dollars(calc["total_portfolio_value"]), "Holdings + FDRXX cash")
-    with m2:
-        render_card("📦", "Holdings Value", format_dollars(calc["holdings_market_value"]), "Money currently invested")
+    total_value = float(calc["total_portfolio_value"])
+    holdings_value = float(calc["holdings_market_value"])
+    cash_value = float(calc["available_cash"])
+    holdings_basis = float(calc["holdings_cost_basis"])
+    holdings_gain_loss = float(calc["holdings_gain_loss"])
+    total_contributions = float(calc["total_contributions"])
 
-    b1, b2 = st.columns(2)
-    with b1:
-        render_card("💰", "Cash Ready (FDRXX)", format_dollars(calc["available_cash"]), "Available dry powder")
-    with b2:
-        render_card("📦", "Invested Cost Basis", format_dollars(calc["holdings_cost_basis"]), "Cost basis currently in holdings")
+    invested_pct = (holdings_value / total_value * 100.0) if total_value > 0 else 0.0
+    cash_pct = (cash_value / total_value * 100.0) if total_value > 0 else 0.0
+    basis_pct = (holdings_basis / total_value * 100.0) if total_value > 0 else 0.0
+    gain_loss_pct = (holdings_gain_loss / holdings_basis * 100.0) if holdings_basis > 0 else 0.0
 
-    g1, g2 = st.columns(2)
-    with g1:
-        render_card("🟢", "Holdings Gain / Loss", format_dollars(calc["holdings_gain_loss"]), "Market value minus invested basis")
-    with g2:
+    row1_col1, row1_col2 = st.columns(2)
+    with row1_col1:
+        render_card(
+            "&#127974;",
+            "Total Account Value",
+            format_dollars(total_value),
+            "100.0% of account",
+            f"Holdings + FDRXX cash | Contributions: {format_dollars(total_contributions)}",
+        )
+    with row1_col2:
+        render_card(
+            "&#128202;",
+            "Holdings Value",
+            format_dollars(holdings_value),
+            f"{format_percent(invested_pct)} of account",
+            "Currently invested holdings only",
+        )
+
+    row2_col1, row2_col2 = st.columns(2)
+    with row2_col1:
+        render_card(
+            "&#128181;",
+            "Cash Ready (FDRXX)",
+            format_dollars(cash_value),
+            f"{format_percent(cash_pct)} of account",
+            "Available dry powder",
+        )
+    with row2_col2:
+        render_card(
+            "&#127919;",
+            "Invested Cost Basis",
+            format_dollars(holdings_basis),
+            f"{format_percent(basis_pct)} of account",
+            "Cost basis currently in holdings",
+        )
+
+    row3_col1, row3_col2 = st.columns(2)
+    with row3_col1:
+        render_card(
+            "&#128200;",
+            "Holdings Gain / Loss",
+            format_dollars(holdings_gain_loss),
+            f"{format_percent(gain_loss_pct)} vs invested basis",
+            "Holdings gain/loss only",
+        )
+    with row3_col2:
         st.empty()
-
 
 def render_top_controls(calc: dict) -> None:
     render_section_header(
-        "💰 Cash Command Center",
+        "Cash Command Center",
         "Use this area to match Fidelity cash, update total contributions, or add new money."
     )
 
@@ -937,18 +1522,34 @@ def render_top_controls(calc: dict) -> None:
 
     st.markdown("#### Total Contributions")
     with st.form("contribution_form"):
+        current_floor = round_money(st.session_state.get("protected_min_contributions", CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS))
+
         new_total = st.number_input(
             "Total Contributions",
             min_value=0.0,
             value=float(st.session_state.total_contributions),
             step=1000.0,
             format="%.2f",
-            help="Deploying cash does NOT change this.",
+            help="Deploying cash does NOT change this. Lowering this below the protected floor requires authorization.",
         )
+
+        authorize_reduction = False
+        if round_money(new_total) < current_floor:
+            st.warning(
+                f"You are lowering Total Contributions below the protected floor of {format_dollars(current_floor)}. "
+                "Only do this if money was actually removed from the account/contribution base."
+            )
+            authorize_reduction = st.checkbox(
+                "Authorize this intentional contribution reduction and reset the protected floor.",
+                value=False,
+            )
+
         saved = st.form_submit_button("Save Total Contributions", use_container_width=True)
 
     if saved:
         st.session_state.total_contributions = round_money(new_total)
+        st.session_state.authorize_contribution_reduction_once = bool(authorize_reduction)
+
         if save_state():
             st.success("Total contributions saved.")
         else:
@@ -974,7 +1575,7 @@ def render_top_controls(calc: dict) -> None:
 
 def render_deploy_cash(calc: dict) -> None:
     render_section_header(
-        "🚀 Deploy Cash Into a Position",
+        "Deploy Cash Into a Position",
         "Deploying lowers FDRXX cash and raises the selected holding. Total contributions do not change."
     )
 
@@ -1009,7 +1610,7 @@ def render_deploy_cash(calc: dict) -> None:
 
 def render_holdings_editor() -> None:
     render_section_header(
-        "🧾 Portfolio Holdings Editor",
+        "Portfolio Holdings Editor",
         "Manual share edits do NOT move cash. Use Set Exact FDRXX Cash if Fidelity cash needs to match exactly."
     )
 
@@ -1044,7 +1645,7 @@ def render_holdings_editor() -> None:
         sync_editor_from_portfolio()
 
         if ok:
-            st.success("Holdings saved permanently.")
+            st.success("Holdings saved permanently as part of the full protected snapshot.")
         else:
             st.error(f"Could not save holdings. Error: {st.session_state.last_save_error}")
 
@@ -1055,7 +1656,7 @@ def render_breakdowns(calc: dict) -> None:
     df = calc["df"].copy()
 
     render_section_header(
-        "📊 Holdings Breakdown",
+        "Holdings Breakdown",
         "Detailed position values, gain/loss, income estimate, and target drift."
     )
 
@@ -1096,7 +1697,7 @@ def render_breakdowns(calc: dict) -> None:
     )
 
     render_section_header(
-        "💵 Income Breakdown",
+        "Income Breakdown",
         "Estimated monthly and annual income by position."
     )
 
@@ -1119,7 +1720,7 @@ def render_breakdowns(calc: dict) -> None:
 
 def render_income_helper(calc: dict) -> None:
     render_section_header(
-        "🧭 Suggested Use of Available Cash",
+        "Suggested Use of Available Cash",
         "Priority rules: SPYI/DIVO first, then QQQI/FEPI, then smaller add-ons."
     )
 
@@ -1144,11 +1745,11 @@ def render_income_helper(calc: dict) -> None:
 
 def render_system_tools() -> None:
     render_section_header(
-        "🛠️ System Tools",
+        "System Tools",
         "Backup, restore, reload, and safety tools."
     )
 
-    st.warning("Use Download Snapshot Backup before big changes. Do not overwrite your known-good backup with stale data.")
+    st.warning("Use Download Snapshot Backup before big changes. Old 396k/53k files should now be rejected as stale.")
 
     c1, c2, c3 = st.columns(3)
 
@@ -1157,26 +1758,35 @@ def render_system_tools() -> None:
             try:
                 raw = st.session_state.get("session_start_payload", {})
                 state = normalize_state_payload(raw)
-                apply_state_dict(state, "Reversed this session back to the state from when the app opened.")
-                save_state()
-                st.success("Session reversed.")
-                st.rerun()
+                current_floor = round_money(st.session_state.get("protected_min_contributions", CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS))
+
+                if round_money(state.get("total_contributions", 0.0)) < current_floor:
+                    st.error(
+                        f"Reverse blocked because the session-start snapshot is below the protected floor "
+                        f"of {format_dollars(current_floor)}."
+                    )
+                else:
+                    apply_state_dict(state, "Reversed this session back to the state from when the app opened.")
+                    save_state()
+                    st.success("Session reversed.")
+                    st.rerun()
             except Exception as exc:
                 st.error(f"Could not reverse session: {exc}")
 
     with c2:
         if st.button("Reload Best Saved File", use_container_width=True):
             loaded = load_state()
-            apply_state_dict(loaded, "Reloaded from best available saved JSON file.")
+            apply_state_dict(loaded, "Reloaded from best valid full snapshot.")
             st.session_state.loaded_from = loaded.get("_loaded_from", "UNKNOWN")
             st.session_state.version_mismatch_fixed = bool(loaded.get("_version_mismatch_fixed", False))
             st.session_state.candidate_summary = loaded.get("_candidate_summary", [])
+            st.session_state.rejected_summary = loaded.get("_rejected_summary", [])
             st.rerun()
 
     with c3:
         if st.button("Force Save State Now", use_container_width=True):
             if save_state():
-                st.success("Saved and verified current dashboard state.")
+                st.success("Saved and verified current full dashboard snapshot.")
             else:
                 st.error(f"Save failed: {st.session_state.last_save_error}")
 
@@ -1206,25 +1816,44 @@ def render_system_tools() -> None:
         try:
             uploaded_raw = json.loads(uploaded_file.getvalue().decode("utf-8"))
             uploaded_state = normalize_state_payload(uploaded_raw)
+            current_floor = round_money(st.session_state.get("protected_min_contributions", CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS))
+            uploaded_total = round_money(uploaded_state["total_contributions"])
 
             st.info(
                 "Uploaded snapshot ready: "
                 f"Cash {format_dollars(uploaded_state['cash_fdrxx'])}, "
-                f"Total Contributions {format_dollars(uploaded_state['total_contributions'])}."
+                f"Total Contributions {format_dollars(uploaded_total)}, "
+                f"Protected Floor {format_dollars(uploaded_state.get('protected_min_contributions', uploaded_total))}."
             )
 
-            if uploaded_state["total_contributions"] < EXPECTED_MIN_CONTRIBUTIONS_AFTER_30K:
-                st.error(
-                    "This uploaded backup appears to be older than the $30,000 contribution update. "
-                    "Only restore it if you are sure this is the file you want."
-                )
+            restore_allowed = True
+            authorize_lower_restore = False
 
-            if st.button("Restore Uploaded Snapshot And Make It Active", use_container_width=True):
+            if uploaded_total < current_floor:
+                restore_allowed = False
+                st.error(
+                    f"This uploaded backup is below the current protected floor of {format_dollars(current_floor)}. "
+                    "Restore is blocked unless you authorize it as an intentional contribution reduction."
+                )
+                authorize_lower_restore = st.checkbox(
+                    "Authorize restoring this lower contribution snapshot and reset the protected floor.",
+                    value=False,
+                )
+                restore_allowed = bool(authorize_lower_restore)
+
+            if st.button("Restore Uploaded Snapshot And Make It Active", use_container_width=True, disabled=not restore_allowed):
+                if authorize_lower_restore:
+                    uploaded_state["protected_min_contributions"] = uploaded_total
+                    st.session_state.authorize_contribution_reduction_once = True
+                else:
+                    uploaded_state["protected_min_contributions"] = max(uploaded_total, current_floor)
+
                 apply_state_dict(uploaded_state, "Restored from uploaded snapshot backup.")
                 st.session_state.loaded_from = "UPLOADED SNAPSHOT - restored and made active"
                 payload_to_save = make_payload_from_state(uploaded_state, force_timestamp=True)
                 write_payload_everywhere(payload_to_save)
                 st.session_state.last_saved = payload_to_save.get("last_saved", "")
+                st.session_state.protected_min_contributions = payload_to_save.get("protected_min_contributions", uploaded_total)
                 save_state()
                 st.success("Uploaded snapshot restored, saved, backed up in all locations, and made active.")
                 st.rerun()
@@ -1234,6 +1863,7 @@ def render_system_tools() -> None:
 
     st.markdown("#### Save Diagnostics")
     st.caption(f"App version: {APP_BASELINE_VERSION}")
+    st.caption(f"State schema version: {STATE_SCHEMA_VERSION}")
     st.caption(f"Current working directory: {Path.cwd()}")
     st.caption(f"App directory: {APP_DIR}")
     st.caption(f"Hidden active state file: {STATE_FILE}")
@@ -1250,19 +1880,20 @@ def render_system_tools() -> None:
     st.caption(f"Root last-good exists: {LEGACY_LAST_GOOD_FILE.exists()}")
     st.caption(f"Last saved: {st.session_state.get('last_saved', 'not yet') or 'not yet'}")
     st.caption(f"Loaded from: {st.session_state.get('loaded_from', 'UNKNOWN')}")
+    st.caption(f"Protected floor: {format_dollars(st.session_state.get('protected_min_contributions', 0.0))}")
 
     if st.session_state.get("last_save_error"):
         st.error(f"Last save error: {st.session_state.last_save_error}")
 
     st.markdown("#### Dangerous Reset")
 
-    with st.expander("Reset to Protected Post-$30K Production Baseline"):
-        st.error("Only use this if you want to wipe current numbers back to the protected post-$30K baseline.")
-        confirm_reset = st.checkbox("I understand this will reset to the protected post-$30K production baseline.")
+    with st.expander("Reset to Current Protected Full-Snapshot Baseline"):
+        st.error("Only use this if you want to wipe current numbers back to the current protected baseline.")
+        confirm_reset = st.checkbox("I understand this will reset to the current protected full-snapshot baseline.")
         if st.button("Reset to Protected Baseline", use_container_width=True, disabled=not confirm_reset):
             baseline = baseline_state_payload()
-            apply_state_dict(baseline, "Reset to protected post-$30K production baseline complete.")
-            st.session_state.loaded_from = "PROTECTED POST-$30K BASELINE - manual reset"
+            apply_state_dict(baseline, "Reset to current protected full-snapshot baseline complete.")
+            st.session_state.loaded_from = "CURRENT PROTECTED FULL-SNAPSHOT BASELINE - manual reset"
             save_state()
             st.rerun()
 
@@ -1271,9 +1902,9 @@ def main() -> None:
     init_state()
     inject_dashboard_css()
 
-    st.markdown('<div class="dashboard-title">💵 Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
+    st.markdown('<div class="dashboard-title">Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="dashboard-subtitle">Regular production app • revert-proof loader • stale-save protection • restore recovery.</div>',
+        '<div class="dashboard-subtitle">Regular production app &#8226; full-snapshot protection &#8226; stale-save rejection &#8226; restore recovery.</div>',
         unsafe_allow_html=True,
     )
 

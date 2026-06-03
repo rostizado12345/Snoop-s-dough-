@@ -15,7 +15,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1-visual-polish-v7-percent-cards-icons-fixed"
+APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1-visual-polish-v7-percent-cards-icons-fixed-save-floor-repair"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -394,11 +394,12 @@ def save_state() -> bool:
         authorized_reduction = bool(st.session_state.get("authorize_contribution_reduction_once", False))
 
         if current_total < existing_floor and not authorized_reduction:
-            raise RuntimeError(
-                f"Protected save blocked: current Total Contributions {format_dollars(current_total)} "
-                f"is below the protected floor {format_dollars(existing_floor)}. "
-                f"Use the authorized reduction checkbox only if you intentionally removed contribution money."
-            )
+            # Auto-repair stale contribution totals caused by older saved state files.
+            # This keeps holdings/cash edits saveable without weakening the intentional
+            # reduction protection in the Total Contributions form.
+            current_total = existing_floor
+            st.session_state.total_contributions = current_total
+            payload["total_contributions"] = current_total
 
         if authorized_reduction:
             payload["protected_min_contributions"] = current_total

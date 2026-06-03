@@ -1427,9 +1427,6 @@ def render_funding_goal_card(calc: dict) -> None:
 
 
 def render_metrics(calc: dict) -> None:
-    render_paycheck_hero(calc)
-    render_funding_goal_card(calc)
-
     render_section_header(
         "Account Overview",
         "Cash, total value, cost basis, and gains are separated clearly."
@@ -1951,7 +1948,8 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    render_metrics(calc)
+    with st.expander("Show Dashboard", expanded=False):
+        render_metrics(calc)
     st.divider()
 
     render_top_controls(calc)
@@ -1967,6 +1965,14 @@ def main() -> None:
     st.divider()
 
     render_income_helper(calc)
+    st.divider()
+
+    render_section_header(
+        "Retirement Paycheck Summary",
+        "The large paycheck and funding progress cards were moved lower so they do not fill the first screen."
+    )
+    render_paycheck_hero(calc)
+    render_funding_goal_card(calc)
     st.divider()
 
     render_system_tools()

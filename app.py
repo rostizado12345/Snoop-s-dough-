@@ -15,7 +15,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1-visual-polish-v7-percent-cards-icons-fixed-save-floor-repair"
+APP_BASELINE_VERSION = "2026-06-03-full-snapshot-protection-v5-holdings-save-verify-repair"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -368,6 +368,20 @@ def make_state_payload() -> dict:
     }
 
 
+def portfolio_save_signature(df: pd.DataFrame) -> list:
+    clean = normalize_portfolio_df(df).copy()
+
+    for col in ["qty", "avg_cost", "manual_price", "target_weight", "annual_yield"]:
+        clean[col] = clean[col].apply(lambda x: round(to_float(x), 6))
+
+    clean["ticker"] = clean["ticker"].astype(str).str.upper().str.strip()
+    clean["payout_frequency"] = clean["payout_frequency"].astype(str).str.strip()
+    clean["payout_months"] = clean["payout_months"].astype(str).str.strip()
+    clean["notes"] = clean["notes"].astype(str)
+
+    return clean.to_dict(orient="records")
+
+
 def get_existing_protected_floor() -> float:
     floors = [CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS]
 
@@ -416,6 +430,11 @@ def save_state() -> bool:
             raise RuntimeError("Save verification failed: contributions did not match after write.")
         if round_money(verify.get("protected_min_contributions", -1)) != round_money(payload["protected_min_contributions"]):
             raise RuntimeError("Save verification failed: protected floor did not match after write.")
+
+        saved_holdings = portfolio_save_signature(verify.get("portfolio_df", pd.DataFrame()))
+        intended_holdings = portfolio_save_signature(pd.DataFrame(payload["portfolio_df"]))
+        if saved_holdings != intended_holdings:
+            raise RuntimeError("Save verification failed: holdings did not match after write.")
 
         st.session_state.protected_min_contributions = payload["protected_min_contributions"]
         st.session_state.last_saved = payload["last_saved"]
@@ -1616,26 +1635,29 @@ def render_holdings_editor() -> None:
 
     editor_key = f"portfolio_editor_v{st.session_state.get('editor_version', 0)}"
 
-    edited_df = st.data_editor(
-        st.session_state.editor_df,
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True,
-        key=editor_key,
-        column_config={
-            "ticker": st.column_config.TextColumn("Ticker"),
-            "qty": st.column_config.NumberColumn("Qty / Shares", format="%.6f"),
-            "avg_cost": st.column_config.NumberColumn("Avg Cost", format="$%.6f"),
-            "manual_price": st.column_config.NumberColumn("Manual / Fallback Price", format="$%.4f"),
-            "target_weight": st.column_config.NumberColumn("Target Weight %", format="%.2f"),
-            "annual_yield": st.column_config.NumberColumn("Annual Yield", format="%.4f"),
-            "payout_frequency": st.column_config.TextColumn("Payout Frequency"),
-            "payout_months": st.column_config.TextColumn("Payout Months"),
-            "notes": st.column_config.TextColumn("Notes"),
-        },
-    )
+    with st.form(f"holdings_editor_form_v{st.session_state.get('editor_version', 0)}"):
+        edited_df = st.data_editor(
+            st.session_state.editor_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            key=editor_key,
+            column_config={
+                "ticker": st.column_config.TextColumn("Ticker"),
+                "qty": st.column_config.NumberColumn("Qty / Shares", format="%.6f"),
+                "avg_cost": st.column_config.NumberColumn("Avg Cost", format="$%.6f"),
+                "manual_price": st.column_config.NumberColumn("Manual / Fallback Price", format="$%.4f"),
+                "target_weight": st.column_config.NumberColumn("Target Weight %", format="%.2f"),
+                "annual_yield": st.column_config.NumberColumn("Annual Yield", format="%.4f"),
+                "payout_frequency": st.column_config.TextColumn("Payout Frequency"),
+                "payout_months": st.column_config.TextColumn("Payout Months"),
+                "notes": st.column_config.TextColumn("Notes"),
+            },
+        )
 
-    if st.button("Save Holdings Changes", use_container_width=True):
+        save_holdings_pressed = st.form_submit_button("Save Holdings Changes", use_container_width=True)
+
+    if save_holdings_pressed:
         cleaned = normalize_portfolio_df(edited_df)
         st.session_state.portfolio_df = cleaned.copy()
         st.session_state.editor_df = cleaned.copy()
@@ -1645,7 +1667,7 @@ def render_holdings_editor() -> None:
         sync_editor_from_portfolio()
 
         if ok:
-            st.success("Holdings saved permanently as part of the full protected snapshot.")
+            st.success("Holdings saved and verified in the full protected snapshot.")
         else:
             st.error(f"Could not save holdings. Error: {st.session_state.last_save_error}")
 

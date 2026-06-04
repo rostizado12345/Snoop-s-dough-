@@ -15,7 +15,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-03-holdings-primary-state-protection-v1"
+APP_BASELINE_VERSION = "2026-06-04-startup-no-overwrite-save-protection-v2"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -268,12 +268,12 @@ def write_payload_everywhere(payload: dict) -> None:
 
 def load_state() -> dict:
     """
-    Load order is intentionally conservative.
+    Load the safest saved full snapshot without rewriting saved files during startup.
 
-    The main active save file is trusted first. Backups and legacy files are only
-    used if the active file is missing, unreadable, or unsafe. This prevents an
-    older backup/root file from winning just because it has a newer timestamp and
-    then overwriting the current holdings across every save location.
+    Important protection:
+    - Opening/reloading the app must NOT copy a stale primary file over backup files.
+    - The newest valid full snapshot may win over the primary file if the primary is older.
+    - Files are only rewritten by an explicit save, restore, deploy, cash change, or price sync.
     """
     errors = []
     candidates = []
@@ -287,6 +287,7 @@ def load_state() -> dict:
                 "path": path,
                 "state": loaded,
                 "last_saved_dt": parse_saved_time(loaded.get("last_saved", "")),
+                "is_primary": path == STATE_FILE,
             }
 
             if is_candidate_valid(item):
@@ -303,51 +304,27 @@ def load_state() -> dict:
             errors.append(f"{path}: {exc}")
             return None
 
-    primary = load_candidate(STATE_FILE) if STATE_FILE.exists() else None
-
     for path in candidate_state_files():
-        if path == STATE_FILE or not path.exists():
+        if not path.exists():
             continue
 
         item = load_candidate(path)
         if item is not None:
             candidates.append(item)
 
-    if primary is not None:
-        loaded = primary["state"]
-        payload = make_payload_from_state(loaded, force_timestamp=True)
-        loaded["app_baseline_version"] = APP_BASELINE_VERSION
-        loaded["state_schema_version"] = STATE_SCHEMA_VERSION
-        loaded["protected_min_contributions"] = payload["protected_min_contributions"]
-        loaded["_loaded_from"] = f"PRIMARY ACTIVE FULL SNAPSHOT SELECTED: {primary['path']}"
-        loaded["_version_mismatch_fixed"] = True
-        loaded["_active_state_file"] = str(STATE_FILE)
-        loaded["_load_errors"] = errors
-        loaded["_candidate_summary"] = [
-            f"{primary['path']} | PRIMARY | schema {primary['state'].get('state_schema_version', 1)} | "
-            f"contributions {format_dollars(primary['state'].get('total_contributions', 0.0))} | "
-            f"protected floor {format_dollars(primary['state'].get('protected_min_contributions', 0.0))} | "
-            f"cash {format_dollars(primary['state'].get('cash_fdrxx', 0.0))} | "
-            f"saved {primary['state'].get('last_saved', '') or 'unknown'}"
-        ] + [
-            f"{c['path']} | backup checked, not allowed to override primary | schema {c['state'].get('state_schema_version', 1)} | "
-            f"contributions {format_dollars(c['state'].get('total_contributions', 0.0))} | "
-            f"protected floor {format_dollars(c['state'].get('protected_min_contributions', 0.0))} | "
-            f"cash {format_dollars(c['state'].get('cash_fdrxx', 0.0))} | "
-            f"saved {c['state'].get('last_saved', '') or 'unknown'}"
-            for c in candidates
-        ]
-        loaded["_rejected_summary"] = rejected
-
-        # Copy the primary active file outward so backups follow the active state,
-        # not the other way around.
-        write_payload_everywhere(payload)
-
-        loaded["last_saved"] = payload["last_saved"]
-        return loaded
-
     if candidates:
-        best = sorted(candidates, key=candidate_sort_key, reverse=True)[0]
+        primary = next((item for item in candidates if item["is_primary"]), None)
+        newest = sorted(candidates, key=candidate_sort_key, reverse=True)[0]
+
+        # If the active primary is current or tied for newest, keep it.
+        # If another valid snapshot is newer, recover from that instead.
+        if primary is not None and primary["last_saved_dt"] >= newest["last_saved_dt"]:
+            best = primary
+            loaded_from = f"PRIMARY ACTIVE FULL SNAPSHOT SELECTED: {primary['path']}"
+        else:
+            best = newest
+            loaded_from = f"BEST VALID FULL SNAPSHOT SELECTED: {best['path']}"
+
         loaded = best["state"]
 
         if int(loaded.get("state_schema_version", 1)) < STATE_SCHEMA_VERSION:
@@ -356,31 +333,37 @@ def load_state() -> dict:
                 CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS,
             )
 
-        payload = make_payload_from_state(loaded, force_timestamp=True)
+        original_app_version = str(loaded.get("app_baseline_version", ""))
+        original_schema_version = int(loaded.get("state_schema_version", 1))
+
+        normalized_payload = make_payload_from_state(loaded, force_timestamp=False)
         loaded["app_baseline_version"] = APP_BASELINE_VERSION
         loaded["state_schema_version"] = STATE_SCHEMA_VERSION
-        loaded["protected_min_contributions"] = payload["protected_min_contributions"]
-        loaded["_loaded_from"] = f"BACKUP RECOVERY FULL SNAPSHOT SELECTED: {best['path']}"
-        loaded["_version_mismatch_fixed"] = True
+        loaded["protected_min_contributions"] = normalized_payload["protected_min_contributions"]
+        loaded["_loaded_from"] = loaded_from
+        loaded["_version_mismatch_fixed"] = (
+            original_app_version != APP_BASELINE_VERSION
+            or original_schema_version != STATE_SCHEMA_VERSION
+        )
         loaded["_active_state_file"] = str(STATE_FILE)
         loaded["_load_errors"] = errors
         loaded["_candidate_summary"] = [
-            f"{c['path']} | schema {c['state'].get('state_schema_version', 1)} | "
+            f"{c['path']} | {'SELECTED' if c is best else 'checked only - not overwritten'} | schema {c['state'].get('state_schema_version', 1)} | "
             f"contributions {format_dollars(c['state'].get('total_contributions', 0.0))} | "
             f"protected floor {format_dollars(c['state'].get('protected_min_contributions', 0.0))} | "
             f"cash {format_dollars(c['state'].get('cash_fdrxx', 0.0))} | "
             f"saved {c['state'].get('last_saved', '') or 'unknown'}"
-            for c in candidates
+            for c in sorted(candidates, key=candidate_sort_key, reverse=True)
         ]
         loaded["_rejected_summary"] = rejected
-
-        write_payload_everywhere(payload)
-
-        loaded["last_saved"] = payload["last_saved"]
+        loaded["_startup_write_blocked"] = True
+        loaded["_needs_force_save_to_spread_snapshot"] = best["path"] != STATE_FILE
         return loaded
 
     state = baseline_state_payload()
     payload = make_payload_from_state(state, force_timestamp=True)
+
+    # First-run only: no saved state exists, so create the initial protected baseline.
     write_payload_everywhere(payload)
 
     state["_loaded_from"] = "CURRENT PROTECTED FULL-SNAPSHOT BASELINE - no valid saved file found"
@@ -389,9 +372,10 @@ def load_state() -> dict:
     state["_load_errors"] = errors
     state["_candidate_summary"] = []
     state["_rejected_summary"] = rejected
+    state["_startup_write_blocked"] = False
+    state["_needs_force_save_to_spread_snapshot"] = False
     state["last_saved"] = payload["last_saved"]
     return state
-
 
 def make_state_payload() -> dict:
     df = normalize_portfolio_df(st.session_state.portfolio_df.copy())
@@ -571,6 +555,8 @@ def init_state() -> None:
 
     st.session_state.loaded_from = loaded.get("_loaded_from", "UNKNOWN")
     st.session_state.version_mismatch_fixed = bool(loaded.get("_version_mismatch_fixed", False))
+    st.session_state.startup_write_blocked = bool(loaded.get("_startup_write_blocked", False))
+    st.session_state.needs_force_save_to_spread_snapshot = bool(loaded.get("_needs_force_save_to_spread_snapshot", False))
     st.session_state.active_state_file = str(STATE_FILE)
     st.session_state.load_errors = loaded.get("_load_errors", [])
     st.session_state.candidate_summary = loaded.get("_candidate_summary", [])
@@ -1375,7 +1361,9 @@ def render_state_health_box() -> None:
     legacy_backup_exists = LEGACY_BACKUP_FILE.exists()
 
     good_loader = (
-        "BEST VALID FULL SNAPSHOT" in loaded_from
+        "PRIMARY ACTIVE FULL SNAPSHOT" in loaded_from
+        or "BEST VALID FULL SNAPSHOT" in loaded_from
+        or "BACKUP RECOVERY FULL SNAPSHOT" in loaded_from
         or "CURRENT FULL SNAPSHOT" in loaded_from
         or "UPLOADED SNAPSHOT" in loaded_from
         or "CURRENT PROTECTED FULL-SNAPSHOT BASELINE" in loaded_from
@@ -1412,8 +1400,14 @@ def render_state_health_box() -> None:
         f"Root save: {legacy_exists} | Root backup: {legacy_backup_exists}"
     )
 
+    if st.session_state.get("startup_write_blocked", False):
+        st.info("Startup overwrite protection is active: opening the app did not copy any saved file over another saved file.")
+
+    if st.session_state.get("needs_force_save_to_spread_snapshot", False):
+        st.warning("A newer backup was loaded instead of the active primary file. Use Force Save State Now after checking the numbers to make this recovered snapshot active everywhere.")
+
     if st.session_state.get("version_mismatch_fixed", False):
-        st.info("Smart loader copied the best valid full snapshot into every save and backup location.")
+        st.info("State was normalized to the current app version in memory. It will be written only when you save.")
 
     if st.session_state.get("candidate_summary"):
         with st.expander("Valid full snapshots checked by smart loader"):
@@ -1856,6 +1850,8 @@ def render_system_tools() -> None:
             apply_state_dict(loaded, "Reloaded from best valid full snapshot.")
             st.session_state.loaded_from = loaded.get("_loaded_from", "UNKNOWN")
             st.session_state.version_mismatch_fixed = bool(loaded.get("_version_mismatch_fixed", False))
+            st.session_state.startup_write_blocked = bool(loaded.get("_startup_write_blocked", False))
+            st.session_state.needs_force_save_to_spread_snapshot = bool(loaded.get("_needs_force_save_to_spread_snapshot", False))
             st.session_state.candidate_summary = loaded.get("_candidate_summary", [])
             st.session_state.rejected_summary = loaded.get("_rejected_summary", [])
             st.rerun()

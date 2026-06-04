@@ -15,7 +15,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-03-full-snapshot-protection-v5-holdings-save-verify-repair"
+APP_BASELINE_VERSION = "2026-06-03-holdings-primary-state-protection-v1"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -267,14 +267,19 @@ def write_payload_everywhere(payload: dict) -> None:
 
 
 def load_state() -> dict:
+    """
+    Load order is intentionally conservative.
+
+    The main active save file is trusted first. Backups and legacy files are only
+    used if the active file is missing, unreadable, or unsafe. This prevents an
+    older backup/root file from winning just because it has a newer timestamp and
+    then overwriting the current holdings across every save location.
+    """
     errors = []
     candidates = []
     rejected = []
 
-    for path in candidate_state_files():
-        if not path.exists():
-            continue
-
+    def load_candidate(path: Path):
         try:
             raw = read_json_file(path)
             loaded = normalize_state_payload(raw)
@@ -285,15 +290,61 @@ def load_state() -> dict:
             }
 
             if is_candidate_valid(item):
-                candidates.append(item)
-            else:
-                rejected.append(
-                    f"{path} | rejected stale/unsafe | contributions {format_dollars(loaded.get('total_contributions', 0.0))} | "
-                    f"protected floor {format_dollars(loaded.get('protected_min_contributions', 0.0))} | "
-                    f"schema {loaded.get('state_schema_version', 1)} | saved {loaded.get('last_saved', '') or 'unknown'}"
-                )
+                return item
+
+            rejected.append(
+                f"{path} | rejected stale/unsafe | contributions {format_dollars(loaded.get('total_contributions', 0.0))} | "
+                f"protected floor {format_dollars(loaded.get('protected_min_contributions', 0.0))} | "
+                f"schema {loaded.get('state_schema_version', 1)} | saved {loaded.get('last_saved', '') or 'unknown'}"
+            )
+            return None
+
         except Exception as exc:
             errors.append(f"{path}: {exc}")
+            return None
+
+    primary = load_candidate(STATE_FILE) if STATE_FILE.exists() else None
+
+    for path in candidate_state_files():
+        if path == STATE_FILE or not path.exists():
+            continue
+
+        item = load_candidate(path)
+        if item is not None:
+            candidates.append(item)
+
+    if primary is not None:
+        loaded = primary["state"]
+        payload = make_payload_from_state(loaded, force_timestamp=True)
+        loaded["app_baseline_version"] = APP_BASELINE_VERSION
+        loaded["state_schema_version"] = STATE_SCHEMA_VERSION
+        loaded["protected_min_contributions"] = payload["protected_min_contributions"]
+        loaded["_loaded_from"] = f"PRIMARY ACTIVE FULL SNAPSHOT SELECTED: {primary['path']}"
+        loaded["_version_mismatch_fixed"] = True
+        loaded["_active_state_file"] = str(STATE_FILE)
+        loaded["_load_errors"] = errors
+        loaded["_candidate_summary"] = [
+            f"{primary['path']} | PRIMARY | schema {primary['state'].get('state_schema_version', 1)} | "
+            f"contributions {format_dollars(primary['state'].get('total_contributions', 0.0))} | "
+            f"protected floor {format_dollars(primary['state'].get('protected_min_contributions', 0.0))} | "
+            f"cash {format_dollars(primary['state'].get('cash_fdrxx', 0.0))} | "
+            f"saved {primary['state'].get('last_saved', '') or 'unknown'}"
+        ] + [
+            f"{c['path']} | backup checked, not allowed to override primary | schema {c['state'].get('state_schema_version', 1)} | "
+            f"contributions {format_dollars(c['state'].get('total_contributions', 0.0))} | "
+            f"protected floor {format_dollars(c['state'].get('protected_min_contributions', 0.0))} | "
+            f"cash {format_dollars(c['state'].get('cash_fdrxx', 0.0))} | "
+            f"saved {c['state'].get('last_saved', '') or 'unknown'}"
+            for c in candidates
+        ]
+        loaded["_rejected_summary"] = rejected
+
+        # Copy the primary active file outward so backups follow the active state,
+        # not the other way around.
+        write_payload_everywhere(payload)
+
+        loaded["last_saved"] = payload["last_saved"]
+        return loaded
 
     if candidates:
         best = sorted(candidates, key=candidate_sort_key, reverse=True)[0]
@@ -309,7 +360,7 @@ def load_state() -> dict:
         loaded["app_baseline_version"] = APP_BASELINE_VERSION
         loaded["state_schema_version"] = STATE_SCHEMA_VERSION
         loaded["protected_min_contributions"] = payload["protected_min_contributions"]
-        loaded["_loaded_from"] = f"BEST VALID FULL SNAPSHOT SELECTED: {best['path']}"
+        loaded["_loaded_from"] = f"BACKUP RECOVERY FULL SNAPSHOT SELECTED: {best['path']}"
         loaded["_version_mismatch_fixed"] = True
         loaded["_active_state_file"] = str(STATE_FILE)
         loaded["_load_errors"] = errors
@@ -368,8 +419,12 @@ def make_state_payload() -> dict:
     }
 
 
-def portfolio_save_signature(df: pd.DataFrame) -> list:
-    clean = normalize_portfolio_df(df).copy()
+def portfolio_save_signature(df_or_records) -> list:
+    """
+    Stable holdings fingerprint used only to verify that saved holdings actually
+    match the intended portfolio. This does not change portfolio math.
+    """
+    clean = normalize_portfolio_df(pd.DataFrame(df_or_records)).copy()
 
     for col in ["qty", "avg_cost", "manual_price", "target_weight", "annual_yield"]:
         clean[col] = clean[col].apply(lambda x: round(to_float(x), 6))
@@ -431,8 +486,8 @@ def save_state() -> bool:
         if round_money(verify.get("protected_min_contributions", -1)) != round_money(payload["protected_min_contributions"]):
             raise RuntimeError("Save verification failed: protected floor did not match after write.")
 
-        saved_holdings = portfolio_save_signature(verify.get("portfolio_df", pd.DataFrame()))
-        intended_holdings = portfolio_save_signature(pd.DataFrame(payload["portfolio_df"]))
+        saved_holdings = portfolio_save_signature(verify.get("portfolio_df", []))
+        intended_holdings = portfolio_save_signature(payload["portfolio_df"])
         if saved_holdings != intended_holdings:
             raise RuntimeError("Save verification failed: holdings did not match after write.")
 

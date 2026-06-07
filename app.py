@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
@@ -15,7 +16,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-04-startup-no-overwrite-save-protection-v2"
+APP_BASELINE_VERSION = "2026-06-07-home-persistent-save-recovery-v3"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -24,8 +25,9 @@ CONSERVATIVE_INCOME_FACTOR = 0.632
 
 APP_DIR = Path(__file__).resolve().parent
 STATE_DIR = APP_DIR / ".retirement_dashboard_state"
-STATE_DIR.mkdir(exist_ok=True)
+STATE_DIR.mkdir(parents=True, exist_ok=True)
 
+# App-folder copies are kept for compatibility with the existing dashboard.
 STATE_FILE = STATE_DIR / "retirement_dashboard_state.json"
 BACKUP_FILE = STATE_DIR / "retirement_dashboard_state_backup.json"
 LAST_GOOD_FILE = STATE_DIR / "retirement_dashboard_state_last_good.json"
@@ -33,6 +35,16 @@ LAST_GOOD_FILE = STATE_DIR / "retirement_dashboard_state_last_good.json"
 LEGACY_STATE_FILE = APP_DIR / "retirement_dashboard_state.json"
 LEGACY_BACKUP_FILE = APP_DIR / "retirement_dashboard_state_backup.json"
 LEGACY_LAST_GOOD_FILE = APP_DIR / "retirement_dashboard_state_last_good.json"
+
+# Home-folder copies survive app filename changes, Downloads-folder copies, and most local reruns.
+HOME_STATE_DIR = Path.home() / ".retirement_dashboard_state"
+HOME_STATE_DIR.mkdir(parents=True, exist_ok=True)
+HOME_STATE_FILE = HOME_STATE_DIR / "retirement_dashboard_state.json"
+HOME_BACKUP_FILE = HOME_STATE_DIR / "retirement_dashboard_state_backup.json"
+HOME_LAST_GOOD_FILE = HOME_STATE_DIR / "retirement_dashboard_state_last_good.json"
+
+# Last-resort portable snapshot. This is refreshed on Save when the app file is writable.
+EMBEDDED_SAVED_STATE_JSON = r'''{}'''
 
 DEFAULT_CASH_FDRXX = 93690.85
 DEFAULT_TOTAL_CONTRIBUTIONS = 436299.07
@@ -188,11 +200,46 @@ def read_json_file(path: Path) -> dict:
 
 
 def write_json_atomic(path: Path, payload: dict) -> None:
-    path.parent.mkdir(exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     temp_file = path.with_suffix(path.suffix + ".tmp")
     with open(temp_file, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
     os.replace(temp_file, path)
+
+
+def read_embedded_state_payload() -> dict:
+    """Read the portable snapshot embedded in this app file, if one exists."""
+    try:
+        raw = EMBEDDED_SAVED_STATE_JSON.strip()
+        if not raw or raw == "{}":
+            return {}
+        return json.loads(raw)
+    except Exception:
+        return {}
+
+
+def write_embedded_state_payload(payload: dict) -> None:
+    """Best-effort: refresh the portable snapshot inside this .py file.
+
+    Normal JSON files are still the primary save system. This embedded copy is
+    only a last-resort recovery layer for cases where sidecar JSON files vanish
+    or the app is opened from a different folder/name. If the app file is
+    read-only, this safely does nothing.
+    """
+    try:
+        app_file = Path(__file__).resolve()
+        source = app_file.read_text(encoding="utf-8")
+        replacement = "EMBEDDED_SAVED_STATE_JSON = r'''" + json.dumps(payload, indent=2) + "'''"
+        updated, count = re.subn(
+            r"EMBEDDED_SAVED_STATE_JSON\s*=\s*r'''[\s\S]*?'''",
+            replacement,
+            source,
+            count=1,
+        )
+        if count == 1 and updated != source:
+            app_file.write_text(updated, encoding="utf-8")
+    except Exception:
+        pass
 
 
 def candidate_state_files() -> List[Path]:
@@ -200,6 +247,9 @@ def candidate_state_files() -> List[Path]:
         STATE_FILE,
         LAST_GOOD_FILE,
         BACKUP_FILE,
+        HOME_STATE_FILE,
+        HOME_LAST_GOOD_FILE,
+        HOME_BACKUP_FILE,
         LEGACY_STATE_FILE,
         LEGACY_LAST_GOOD_FILE,
         LEGACY_BACKUP_FILE,
@@ -261,9 +311,15 @@ def write_payload_everywhere(payload: dict) -> None:
     write_json_atomic(BACKUP_FILE, payload)
     write_json_atomic(LAST_GOOD_FILE, payload)
 
+    write_json_atomic(HOME_STATE_FILE, payload)
+    write_json_atomic(HOME_BACKUP_FILE, payload)
+    write_json_atomic(HOME_LAST_GOOD_FILE, payload)
+
     write_json_atomic(LEGACY_STATE_FILE, payload)
     write_json_atomic(LEGACY_BACKUP_FILE, payload)
     write_json_atomic(LEGACY_LAST_GOOD_FILE, payload)
+
+    write_embedded_state_payload(payload)
 
 
 def load_state() -> dict:
@@ -311,6 +367,27 @@ def load_state() -> dict:
         item = load_candidate(path)
         if item is not None:
             candidates.append(item)
+
+    embedded_raw = read_embedded_state_payload()
+    if embedded_raw:
+        try:
+            embedded_loaded = normalize_state_payload(embedded_raw)
+            embedded_item = {
+                "path": Path("EMBEDDED_APP_FILE_SNAPSHOT"),
+                "state": embedded_loaded,
+                "last_saved_dt": parse_saved_time(embedded_loaded.get("last_saved", "")),
+                "is_primary": False,
+            }
+            if is_candidate_valid(embedded_item):
+                candidates.append(embedded_item)
+            else:
+                rejected.append(
+                    f"EMBEDDED_APP_FILE_SNAPSHOT | rejected stale/unsafe | contributions {format_dollars(embedded_loaded.get('total_contributions', 0.0))} | "
+                    f"protected floor {format_dollars(embedded_loaded.get('protected_min_contributions', 0.0))} | "
+                    f"schema {embedded_loaded.get('state_schema_version', 1)} | saved {embedded_loaded.get('last_saved', '') or 'unknown'}"
+                )
+        except Exception as exc:
+            errors.append(f"EMBEDDED_APP_FILE_SNAPSHOT: {exc}")
 
     if candidates:
         primary = next((item for item in candidates if item["is_primary"]), None)
@@ -1820,7 +1897,7 @@ def render_system_tools() -> None:
         "Backup, restore, reload, and safety tools."
     )
 
-    st.warning("Use Download Snapshot Backup before big changes. Old 396k/53k files should now be rejected as stale.")
+    st.warning("Use Download Snapshot Backup before big changes. The app now saves app-folder, home-folder, and embedded recovery copies; old 396k/53k files should still be rejected as stale.")
 
     c1, c2, c3 = st.columns(3)
 
@@ -1945,12 +2022,19 @@ def render_system_tools() -> None:
     st.caption(f"Root state file: {LEGACY_STATE_FILE}")
     st.caption(f"Root backup file: {LEGACY_BACKUP_FILE}")
     st.caption(f"Root last-good file: {LEGACY_LAST_GOOD_FILE}")
+    st.caption(f"Home state file: {HOME_STATE_FILE}")
+    st.caption(f"Home backup file: {HOME_BACKUP_FILE}")
+    st.caption(f"Home last-good file: {HOME_LAST_GOOD_FILE}")
+    st.caption(f"Embedded app-file snapshot exists: {bool(read_embedded_state_payload())}")
     st.caption(f"Hidden state exists: {STATE_FILE.exists()}")
     st.caption(f"Hidden backup exists: {BACKUP_FILE.exists()}")
     st.caption(f"Hidden last-good exists: {LAST_GOOD_FILE.exists()}")
     st.caption(f"Root state exists: {LEGACY_STATE_FILE.exists()}")
     st.caption(f"Root backup exists: {LEGACY_BACKUP_FILE.exists()}")
     st.caption(f"Root last-good exists: {LEGACY_LAST_GOOD_FILE.exists()}")
+    st.caption(f"Home state exists: {HOME_STATE_FILE.exists()}")
+    st.caption(f"Home backup exists: {HOME_BACKUP_FILE.exists()}")
+    st.caption(f"Home last-good exists: {HOME_LAST_GOOD_FILE.exists()}")
     st.caption(f"Last saved: {st.session_state.get('last_saved', 'not yet') or 'not yet'}")
     st.caption(f"Loaded from: {st.session_state.get('loaded_from', 'UNKNOWN')}")
     st.caption(f"Protected floor: {format_dollars(st.session_state.get('protected_min_contributions', 0.0))}")

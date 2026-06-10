@@ -16,7 +16,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-07-home-persistent-save-recovery-v3"
+APP_BASELINE_VERSION = "2026-06-09-force-fidelity-holdings-recovery-v4"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -44,7 +44,164 @@ HOME_BACKUP_FILE = HOME_STATE_DIR / "retirement_dashboard_state_backup.json"
 HOME_LAST_GOOD_FILE = HOME_STATE_DIR / "retirement_dashboard_state_last_good.json"
 
 # Last-resort portable snapshot. This is refreshed on Save when the app file is writable.
-EMBEDDED_SAVED_STATE_JSON = r'''{}'''
+EMBEDDED_SAVED_STATE_JSON = r'''{
+  "state_schema_version": 2,
+  "app_baseline_version": "2026-06-09-force-fidelity-holdings-recovery-v4",
+  "portfolio_df": [
+    {
+      "ticker": "AIPI",
+      "qty": 668.196,
+      "avg_cost": 34.04685,
+      "manual_price": 35.68,
+      "target_weight": 5.0,
+      "annual_yield": 0.124,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "CHPY",
+      "qty": 440.524,
+      "avg_cost": 56.06939,
+      "manual_price": 67.7,
+      "target_weight": 6.0,
+      "annual_yield": 0.05,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "DIVO",
+      "qty": 1087.28,
+      "avg_cost": 44.92944,
+      "manual_price": 45.13,
+      "target_weight": 10.0,
+      "annual_yield": 0.048,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "FEPI",
+      "qty": 820.192,
+      "avg_cost": 39.99048,
+      "manual_price": 42.93,
+      "target_weight": 7.0,
+      "annual_yield": 0.12,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "GDXY",
+      "qty": 3311.524,
+      "avg_cost": 13.10574,
+      "manual_price": 12.71,
+      "target_weight": 15.0,
+      "annual_yield": 0.18,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "IAU",
+      "qty": 174.866,
+      "avg_cost": 84.63566,
+      "manual_price": 85.55,
+      "target_weight": 4.0,
+      "annual_yield": 0.0,
+      "payout_frequency": "none",
+      "payout_months": "none",
+      "notes": ""
+    },
+    {
+      "ticker": "IWMI",
+      "qty": 306.959,
+      "avg_cost": 48.21481,
+      "manual_price": 50.37,
+      "target_weight": 4.0,
+      "annual_yield": 0.12,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "IYRI",
+      "qty": 314.264,
+      "avg_cost": 46.93339,
+      "manual_price": 49.16,
+      "target_weight": 5.0,
+      "annual_yield": 0.08,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "MLPI",
+      "qty": 273.825,
+      "avg_cost": 56.78753,
+      "manual_price": 56.38,
+      "target_weight": 4.0,
+      "annual_yield": 0.08,
+      "payout_frequency": "quarterly",
+      "payout_months": "3,6,9,12",
+      "notes": ""
+    },
+    {
+      "ticker": "QQQI",
+      "qty": 655.929,
+      "avg_cost": 50.46252,
+      "manual_price": 53.86,
+      "target_weight": 10.0,
+      "annual_yield": 0.14,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "SPYI",
+      "qty": 1116.585,
+      "avg_cost": 49.48005,
+      "manual_price": 52.14,
+      "target_weight": 12.0,
+      "annual_yield": 0.12,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "SVOL",
+      "qty": 1542.23,
+      "avg_cost": 15.49701,
+      "manual_price": 15.91,
+      "target_weight": 6.0,
+      "annual_yield": 0.16,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "TLTW",
+      "qty": 971.555,
+      "avg_cost": 22.28491,
+      "manual_price": 22.3,
+      "target_weight": 7.0,
+      "annual_yield": 0.12,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    }
+  ],
+  "cash_fdrxx": 93690.85,
+  "total_contributions": 436299.07,
+  "protected_min_contributions": 436299.07,
+  "use_live_prices": true,
+  "auto_sync_prices": true,
+  "last_price_sync": "",
+  "last_saved": "2026-06-09 11:59:59 PM",
+  "last_deploy_message": "Force-loaded Fidelity holdings recovery snapshot.",
+  "last_cash_message": "FDRXX cash baseline: $93,690.85."
+}'''
 
 DEFAULT_CASH_FDRXX = 93690.85
 DEFAULT_TOTAL_CONTRIBUTIONS = 436299.07
@@ -299,11 +456,20 @@ def is_candidate_valid(item: dict) -> bool:
     schema_version = int(state.get("state_schema_version", 1))
     total = round_money(state.get("total_contributions", 0.0))
     protected_min = round_money(state.get("protected_min_contributions", total))
+    app_version = str(state.get("app_baseline_version", ""))
+
+    # v4 protection: old saved JSON files can have the right contribution floor
+    # but the wrong holdings table. That was the cause of the holdings coming
+    # back after reload. Only current-version full snapshots are allowed to win
+    # automatically. The embedded v4 recovery snapshot below is the bridge from
+    # the old v3 files into the corrected Fidelity holdings.
+    if app_version != APP_BASELINE_VERSION:
+        return False
 
     if schema_version < STATE_SCHEMA_VERSION:
-        return total >= CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS
+        return False
 
-    return total >= protected_min
+    return total >= protected_min and total >= CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS
 
 
 def write_payload_everywhere(payload: dict) -> None:
@@ -1897,7 +2063,7 @@ def render_system_tools() -> None:
         "Backup, restore, reload, and safety tools."
     )
 
-    st.warning("Use Download Snapshot Backup before big changes. The app now saves app-folder, home-folder, and embedded recovery copies; old 396k/53k files should still be rejected as stale.")
+    st.warning("Use Download Snapshot Backup before big changes. The app now saves app-folder, home-folder, and embedded recovery copies; old v3 / 396k / 53k files are rejected so stale holdings cannot win again.")
 
     c1, c2, c3 = st.columns(3)
 

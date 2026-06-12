@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
@@ -15,7 +16,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-01-full-snapshot-protection-v5-cards-v1-visual-polish-v7-percent-cards-icons-fixed-save-floor-repair"
+APP_BASELINE_VERSION = "2026-06-09-force-fidelity-holdings-recovery-v5-fidelity-verified-shares"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -24,8 +25,9 @@ CONSERVATIVE_INCOME_FACTOR = 0.632
 
 APP_DIR = Path(__file__).resolve().parent
 STATE_DIR = APP_DIR / ".retirement_dashboard_state"
-STATE_DIR.mkdir(exist_ok=True)
+STATE_DIR.mkdir(parents=True, exist_ok=True)
 
+# App-folder copies are kept for compatibility with the existing dashboard.
 STATE_FILE = STATE_DIR / "retirement_dashboard_state.json"
 BACKUP_FILE = STATE_DIR / "retirement_dashboard_state_backup.json"
 LAST_GOOD_FILE = STATE_DIR / "retirement_dashboard_state_last_good.json"
@@ -34,7 +36,174 @@ LEGACY_STATE_FILE = APP_DIR / "retirement_dashboard_state.json"
 LEGACY_BACKUP_FILE = APP_DIR / "retirement_dashboard_state_backup.json"
 LEGACY_LAST_GOOD_FILE = APP_DIR / "retirement_dashboard_state_last_good.json"
 
-DEFAULT_CASH_FDRXX = 93690.85
+# Home-folder copies survive app filename changes, Downloads-folder copies, and most local reruns.
+HOME_STATE_DIR = Path.home() / ".retirement_dashboard_state"
+HOME_STATE_DIR.mkdir(parents=True, exist_ok=True)
+HOME_STATE_FILE = HOME_STATE_DIR / "retirement_dashboard_state.json"
+HOME_BACKUP_FILE = HOME_STATE_DIR / "retirement_dashboard_state_backup.json"
+HOME_LAST_GOOD_FILE = HOME_STATE_DIR / "retirement_dashboard_state_last_good.json"
+
+# Last-resort portable snapshot. This is refreshed on Save when the app file is writable.
+EMBEDDED_SAVED_STATE_JSON = r'''{
+  "state_schema_version": 2,
+  "app_baseline_version": "2026-06-09-force-fidelity-holdings-recovery-v5-fidelity-verified-shares",
+  "portfolio_df": [
+    {
+      "ticker": "AIPI",
+      "qty": 692.808,
+      "avg_cost": 34.04685,
+      "manual_price": 35.68,
+      "target_weight": 5.0,
+      "annual_yield": 0.124,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "CHPY",
+      "qty": 463.05,
+      "avg_cost": 56.06939,
+      "manual_price": 67.7,
+      "target_weight": 6.0,
+      "annual_yield": 0.05,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "DIVO",
+      "qty": 1317.602,
+      "avg_cost": 44.92944,
+      "manual_price": 45.13,
+      "target_weight": 10.0,
+      "annual_yield": 0.048,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "FEPI",
+      "qty": 916.088,
+      "avg_cost": 39.99048,
+      "manual_price": 42.93,
+      "target_weight": 7.0,
+      "annual_yield": 0.12,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "GDXY",
+      "qty": 3530.571,
+      "avg_cost": 13.10574,
+      "manual_price": 12.71,
+      "target_weight": 15.0,
+      "annual_yield": 0.18,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "IAU",
+      "qty": 174.866,
+      "avg_cost": 84.63566,
+      "manual_price": 85.55,
+      "target_weight": 4.0,
+      "annual_yield": 0.0,
+      "payout_frequency": "none",
+      "payout_months": "none",
+      "notes": ""
+    },
+    {
+      "ticker": "IWMI",
+      "qty": 314.353,
+      "avg_cost": 48.21481,
+      "manual_price": 50.37,
+      "target_weight": 4.0,
+      "annual_yield": 0.12,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "IYRI",
+      "qty": 381.608,
+      "avg_cost": 46.93339,
+      "manual_price": 49.16,
+      "target_weight": 5.0,
+      "annual_yield": 0.08,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "MLPI",
+      "qty": 333.107,
+      "avg_cost": 56.78753,
+      "manual_price": 56.38,
+      "target_weight": 4.0,
+      "annual_yield": 0.08,
+      "payout_frequency": "quarterly",
+      "payout_months": "3,6,9,12",
+      "notes": ""
+    },
+    {
+      "ticker": "QQQI",
+      "qty": 719.369,
+      "avg_cost": 50.46252,
+      "manual_price": 53.86,
+      "target_weight": 10.0,
+      "annual_yield": 0.14,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "SPYI",
+      "qty": 1262.507,
+      "avg_cost": 49.48005,
+      "manual_price": 52.14,
+      "target_weight": 12.0,
+      "annual_yield": 0.12,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "SVOL",
+      "qty": 1596.886,
+      "avg_cost": 15.49701,
+      "manual_price": 15.91,
+      "target_weight": 6.0,
+      "annual_yield": 0.16,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    },
+    {
+      "ticker": "TLTW",
+      "qty": 976.835,
+      "avg_cost": 22.28491,
+      "manual_price": 22.3,
+      "target_weight": 7.0,
+      "annual_yield": 0.12,
+      "payout_frequency": "monthly",
+      "payout_months": "all",
+      "notes": ""
+    }
+  ],
+  "cash_fdrxx": 93912.21,
+  "total_contributions": 436299.07,
+  "protected_min_contributions": 436299.07,
+  "use_live_prices": true,
+  "auto_sync_prices": true,
+  "last_price_sync": "",
+  "last_saved": "2026-06-09 11:59:59 PM",
+  "last_deploy_message": "Force-loaded Fidelity-verified shares recovery snapshot.",
+  "last_cash_message": "FDRXX cash baseline: $93,912.21."
+}'''
+
+DEFAULT_CASH_FDRXX = 93912.21
 DEFAULT_TOTAL_CONTRIBUTIONS = 436299.07
 CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS = 436299.07
 
@@ -44,19 +213,19 @@ DEFAULT_COLUMNS = [
 ]
 
 DEFAULT_ROWS = [
-    ["AIPI", 668.196, 34.04685, 35.68, 5.0, 0.124, "monthly", "all", ""],
-    ["CHPY", 440.524, 56.06939, 67.70, 6.0, 0.050, "monthly", "all", ""],
-    ["DIVO", 1087.280, 44.92944, 45.13, 10.0, 0.048, "monthly", "all", ""],
-    ["FEPI", 820.192, 39.99048, 42.93, 7.0, 0.120, "monthly", "all", ""],
-    ["GDXY", 3311.524, 13.10574, 12.71, 15.0, 0.180, "monthly", "all", ""],
+    ["AIPI", 692.808, 34.04685, 35.68, 5.0, 0.124, "monthly", "all", ""],
+    ["CHPY", 463.050, 56.06939, 67.70, 6.0, 0.050, "monthly", "all", ""],
+    ["DIVO", 1317.602, 44.92944, 45.13, 10.0, 0.048, "monthly", "all", ""],
+    ["FEPI", 916.088, 39.99048, 42.93, 7.0, 0.120, "monthly", "all", ""],
+    ["GDXY", 3530.571, 13.10574, 12.71, 15.0, 0.180, "monthly", "all", ""],
     ["IAU", 174.866, 84.63566, 85.55, 4.0, 0.000, "none", "none", ""],
-    ["IWMI", 306.959, 48.21481, 50.37, 4.0, 0.120, "monthly", "all", ""],
-    ["IYRI", 314.264, 46.93339, 49.16, 5.0, 0.080, "monthly", "all", ""],
-    ["MLPI", 273.825, 56.78753, 56.38, 4.0, 0.080, "quarterly", "3,6,9,12", ""],
-    ["QQQI", 655.929, 50.46252, 53.86, 10.0, 0.140, "monthly", "all", ""],
-    ["SPYI", 1116.585, 49.48005, 52.14, 12.0, 0.120, "monthly", "all", ""],
-    ["SVOL", 1542.230, 15.49701, 15.91, 6.0, 0.160, "monthly", "all", ""],
-    ["TLTW", 971.555, 22.28491, 22.30, 7.0, 0.120, "monthly", "all", ""],
+    ["IWMI", 314.353, 48.21481, 50.37, 4.0, 0.120, "monthly", "all", ""],
+    ["IYRI", 381.608, 46.93339, 49.16, 5.0, 0.080, "monthly", "all", ""],
+    ["MLPI", 333.107, 56.78753, 56.38, 4.0, 0.080, "quarterly", "3,6,9,12", ""],
+    ["QQQI", 719.369, 50.46252, 53.86, 10.0, 0.140, "monthly", "all", ""],
+    ["SPYI", 1262.507, 49.48005, 52.14, 12.0, 0.120, "monthly", "all", ""],
+    ["SVOL", 1596.886, 15.49701, 15.91, 6.0, 0.160, "monthly", "all", ""],
+    ["TLTW", 976.835, 22.28491, 22.30, 7.0, 0.120, "monthly", "all", ""],
 ]
 
 SMART_INCOME_TIERS = {
@@ -188,11 +357,46 @@ def read_json_file(path: Path) -> dict:
 
 
 def write_json_atomic(path: Path, payload: dict) -> None:
-    path.parent.mkdir(exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     temp_file = path.with_suffix(path.suffix + ".tmp")
     with open(temp_file, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
     os.replace(temp_file, path)
+
+
+def read_embedded_state_payload() -> dict:
+    """Read the portable snapshot embedded in this app file, if one exists."""
+    try:
+        raw = EMBEDDED_SAVED_STATE_JSON.strip()
+        if not raw or raw == "{}":
+            return {}
+        return json.loads(raw)
+    except Exception:
+        return {}
+
+
+def write_embedded_state_payload(payload: dict) -> None:
+    """Best-effort: refresh the portable snapshot inside this .py file.
+
+    Normal JSON files are still the primary save system. This embedded copy is
+    only a last-resort recovery layer for cases where sidecar JSON files vanish
+    or the app is opened from a different folder/name. If the app file is
+    read-only, this safely does nothing.
+    """
+    try:
+        app_file = Path(__file__).resolve()
+        source = app_file.read_text(encoding="utf-8")
+        replacement = "EMBEDDED_SAVED_STATE_JSON = r'''" + json.dumps(payload, indent=2) + "'''"
+        updated, count = re.subn(
+            r"EMBEDDED_SAVED_STATE_JSON\s*=\s*r'''[\s\S]*?'''",
+            replacement,
+            source,
+            count=1,
+        )
+        if count == 1 and updated != source:
+            app_file.write_text(updated, encoding="utf-8")
+    except Exception:
+        pass
 
 
 def candidate_state_files() -> List[Path]:
@@ -200,6 +404,9 @@ def candidate_state_files() -> List[Path]:
         STATE_FILE,
         LAST_GOOD_FILE,
         BACKUP_FILE,
+        HOME_STATE_FILE,
+        HOME_LAST_GOOD_FILE,
+        HOME_BACKUP_FILE,
         LEGACY_STATE_FILE,
         LEGACY_LAST_GOOD_FILE,
         LEGACY_BACKUP_FILE,
@@ -249,11 +456,20 @@ def is_candidate_valid(item: dict) -> bool:
     schema_version = int(state.get("state_schema_version", 1))
     total = round_money(state.get("total_contributions", 0.0))
     protected_min = round_money(state.get("protected_min_contributions", total))
+    app_version = str(state.get("app_baseline_version", ""))
+
+    # v5 protection: old saved JSON files can have the right contribution floor
+    # but the wrong holdings table. That was the cause of the holdings coming
+    # back after reload. Only current-version full snapshots are allowed to win
+    # automatically. The embedded v5 recovery snapshot below is the bridge from
+    # the old v3 files into the corrected Fidelity holdings.
+    if app_version != APP_BASELINE_VERSION:
+        return False
 
     if schema_version < STATE_SCHEMA_VERSION:
-        return total >= CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS
+        return False
 
-    return total >= protected_min
+    return total >= protected_min and total >= CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS
 
 
 def write_payload_everywhere(payload: dict) -> None:
@@ -261,20 +477,31 @@ def write_payload_everywhere(payload: dict) -> None:
     write_json_atomic(BACKUP_FILE, payload)
     write_json_atomic(LAST_GOOD_FILE, payload)
 
+    write_json_atomic(HOME_STATE_FILE, payload)
+    write_json_atomic(HOME_BACKUP_FILE, payload)
+    write_json_atomic(HOME_LAST_GOOD_FILE, payload)
+
     write_json_atomic(LEGACY_STATE_FILE, payload)
     write_json_atomic(LEGACY_BACKUP_FILE, payload)
     write_json_atomic(LEGACY_LAST_GOOD_FILE, payload)
 
+    write_embedded_state_payload(payload)
+
 
 def load_state() -> dict:
+    """
+    Load the safest saved full snapshot without rewriting saved files during startup.
+
+    Important protection:
+    - Opening/reloading the app must NOT copy a stale primary file over backup files.
+    - The newest valid full snapshot may win over the primary file if the primary is older.
+    - Files are only rewritten by an explicit save, restore, deploy, cash change, or price sync.
+    """
     errors = []
     candidates = []
     rejected = []
 
-    for path in candidate_state_files():
-        if not path.exists():
-            continue
-
+    def load_candidate(path: Path):
         try:
             raw = read_json_file(path)
             loaded = normalize_state_payload(raw)
@@ -282,21 +509,65 @@ def load_state() -> dict:
                 "path": path,
                 "state": loaded,
                 "last_saved_dt": parse_saved_time(loaded.get("last_saved", "")),
+                "is_primary": path == STATE_FILE,
             }
 
             if is_candidate_valid(item):
-                candidates.append(item)
-            else:
-                rejected.append(
-                    f"{path} | rejected stale/unsafe | contributions {format_dollars(loaded.get('total_contributions', 0.0))} | "
-                    f"protected floor {format_dollars(loaded.get('protected_min_contributions', 0.0))} | "
-                    f"schema {loaded.get('state_schema_version', 1)} | saved {loaded.get('last_saved', '') or 'unknown'}"
-                )
+                return item
+
+            rejected.append(
+                f"{path} | rejected stale/unsafe | contributions {format_dollars(loaded.get('total_contributions', 0.0))} | "
+                f"protected floor {format_dollars(loaded.get('protected_min_contributions', 0.0))} | "
+                f"schema {loaded.get('state_schema_version', 1)} | saved {loaded.get('last_saved', '') or 'unknown'}"
+            )
+            return None
+
         except Exception as exc:
             errors.append(f"{path}: {exc}")
+            return None
+
+    for path in candidate_state_files():
+        if not path.exists():
+            continue
+
+        item = load_candidate(path)
+        if item is not None:
+            candidates.append(item)
+
+    embedded_raw = read_embedded_state_payload()
+    if embedded_raw:
+        try:
+            embedded_loaded = normalize_state_payload(embedded_raw)
+            embedded_item = {
+                "path": Path("EMBEDDED_APP_FILE_SNAPSHOT"),
+                "state": embedded_loaded,
+                "last_saved_dt": parse_saved_time(embedded_loaded.get("last_saved", "")),
+                "is_primary": False,
+            }
+            if is_candidate_valid(embedded_item):
+                candidates.append(embedded_item)
+            else:
+                rejected.append(
+                    f"EMBEDDED_APP_FILE_SNAPSHOT | rejected stale/unsafe | contributions {format_dollars(embedded_loaded.get('total_contributions', 0.0))} | "
+                    f"protected floor {format_dollars(embedded_loaded.get('protected_min_contributions', 0.0))} | "
+                    f"schema {embedded_loaded.get('state_schema_version', 1)} | saved {embedded_loaded.get('last_saved', '') or 'unknown'}"
+                )
+        except Exception as exc:
+            errors.append(f"EMBEDDED_APP_FILE_SNAPSHOT: {exc}")
 
     if candidates:
-        best = sorted(candidates, key=candidate_sort_key, reverse=True)[0]
+        primary = next((item for item in candidates if item["is_primary"]), None)
+        newest = sorted(candidates, key=candidate_sort_key, reverse=True)[0]
+
+        # If the active primary is current or tied for newest, keep it.
+        # If another valid snapshot is newer, recover from that instead.
+        if primary is not None and primary["last_saved_dt"] >= newest["last_saved_dt"]:
+            best = primary
+            loaded_from = f"PRIMARY ACTIVE FULL SNAPSHOT SELECTED: {primary['path']}"
+        else:
+            best = newest
+            loaded_from = f"BEST VALID FULL SNAPSHOT SELECTED: {best['path']}"
+
         loaded = best["state"]
 
         if int(loaded.get("state_schema_version", 1)) < STATE_SCHEMA_VERSION:
@@ -305,31 +576,37 @@ def load_state() -> dict:
                 CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS,
             )
 
-        payload = make_payload_from_state(loaded, force_timestamp=True)
+        original_app_version = str(loaded.get("app_baseline_version", ""))
+        original_schema_version = int(loaded.get("state_schema_version", 1))
+
+        normalized_payload = make_payload_from_state(loaded, force_timestamp=False)
         loaded["app_baseline_version"] = APP_BASELINE_VERSION
         loaded["state_schema_version"] = STATE_SCHEMA_VERSION
-        loaded["protected_min_contributions"] = payload["protected_min_contributions"]
-        loaded["_loaded_from"] = f"BEST VALID FULL SNAPSHOT SELECTED: {best['path']}"
-        loaded["_version_mismatch_fixed"] = True
+        loaded["protected_min_contributions"] = normalized_payload["protected_min_contributions"]
+        loaded["_loaded_from"] = loaded_from
+        loaded["_version_mismatch_fixed"] = (
+            original_app_version != APP_BASELINE_VERSION
+            or original_schema_version != STATE_SCHEMA_VERSION
+        )
         loaded["_active_state_file"] = str(STATE_FILE)
         loaded["_load_errors"] = errors
         loaded["_candidate_summary"] = [
-            f"{c['path']} | schema {c['state'].get('state_schema_version', 1)} | "
+            f"{c['path']} | {'SELECTED' if c is best else 'checked only - not overwritten'} | schema {c['state'].get('state_schema_version', 1)} | "
             f"contributions {format_dollars(c['state'].get('total_contributions', 0.0))} | "
             f"protected floor {format_dollars(c['state'].get('protected_min_contributions', 0.0))} | "
             f"cash {format_dollars(c['state'].get('cash_fdrxx', 0.0))} | "
             f"saved {c['state'].get('last_saved', '') or 'unknown'}"
-            for c in candidates
+            for c in sorted(candidates, key=candidate_sort_key, reverse=True)
         ]
         loaded["_rejected_summary"] = rejected
-
-        write_payload_everywhere(payload)
-
-        loaded["last_saved"] = payload["last_saved"]
+        loaded["_startup_write_blocked"] = True
+        loaded["_needs_force_save_to_spread_snapshot"] = best["path"] != STATE_FILE
         return loaded
 
     state = baseline_state_payload()
     payload = make_payload_from_state(state, force_timestamp=True)
+
+    # First-run only: no saved state exists, so create the initial protected baseline.
     write_payload_everywhere(payload)
 
     state["_loaded_from"] = "CURRENT PROTECTED FULL-SNAPSHOT BASELINE - no valid saved file found"
@@ -338,9 +615,10 @@ def load_state() -> dict:
     state["_load_errors"] = errors
     state["_candidate_summary"] = []
     state["_rejected_summary"] = rejected
+    state["_startup_write_blocked"] = False
+    state["_needs_force_save_to_spread_snapshot"] = False
     state["last_saved"] = payload["last_saved"]
     return state
-
 
 def make_state_payload() -> dict:
     df = normalize_portfolio_df(st.session_state.portfolio_df.copy())
@@ -366,6 +644,24 @@ def make_state_payload() -> dict:
         "last_deploy_message": str(st.session_state.get("last_deploy_message", "")),
         "last_cash_message": str(st.session_state.get("last_cash_message", "")),
     }
+
+
+def portfolio_save_signature(df_or_records) -> list:
+    """
+    Stable holdings fingerprint used only to verify that saved holdings actually
+    match the intended portfolio. This does not change portfolio math.
+    """
+    clean = normalize_portfolio_df(pd.DataFrame(df_or_records)).copy()
+
+    for col in ["qty", "avg_cost", "manual_price", "target_weight", "annual_yield"]:
+        clean[col] = clean[col].apply(lambda x: round(to_float(x), 6))
+
+    clean["ticker"] = clean["ticker"].astype(str).str.upper().str.strip()
+    clean["payout_frequency"] = clean["payout_frequency"].astype(str).str.strip()
+    clean["payout_months"] = clean["payout_months"].astype(str).str.strip()
+    clean["notes"] = clean["notes"].astype(str)
+
+    return clean.to_dict(orient="records")
 
 
 def get_existing_protected_floor() -> float:
@@ -416,6 +712,11 @@ def save_state() -> bool:
             raise RuntimeError("Save verification failed: contributions did not match after write.")
         if round_money(verify.get("protected_min_contributions", -1)) != round_money(payload["protected_min_contributions"]):
             raise RuntimeError("Save verification failed: protected floor did not match after write.")
+
+        saved_holdings = portfolio_save_signature(verify.get("portfolio_df", []))
+        intended_holdings = portfolio_save_signature(payload["portfolio_df"])
+        if saved_holdings != intended_holdings:
+            raise RuntimeError("Save verification failed: holdings did not match after write.")
 
         st.session_state.protected_min_contributions = payload["protected_min_contributions"]
         st.session_state.last_saved = payload["last_saved"]
@@ -497,6 +798,8 @@ def init_state() -> None:
 
     st.session_state.loaded_from = loaded.get("_loaded_from", "UNKNOWN")
     st.session_state.version_mismatch_fixed = bool(loaded.get("_version_mismatch_fixed", False))
+    st.session_state.startup_write_blocked = bool(loaded.get("_startup_write_blocked", False))
+    st.session_state.needs_force_save_to_spread_snapshot = bool(loaded.get("_needs_force_save_to_spread_snapshot", False))
     st.session_state.active_state_file = str(STATE_FILE)
     st.session_state.load_errors = loaded.get("_load_errors", [])
     st.session_state.candidate_summary = loaded.get("_candidate_summary", [])
@@ -1301,7 +1604,9 @@ def render_state_health_box() -> None:
     legacy_backup_exists = LEGACY_BACKUP_FILE.exists()
 
     good_loader = (
-        "BEST VALID FULL SNAPSHOT" in loaded_from
+        "PRIMARY ACTIVE FULL SNAPSHOT" in loaded_from
+        or "BEST VALID FULL SNAPSHOT" in loaded_from
+        or "BACKUP RECOVERY FULL SNAPSHOT" in loaded_from
         or "CURRENT FULL SNAPSHOT" in loaded_from
         or "UPLOADED SNAPSHOT" in loaded_from
         or "CURRENT PROTECTED FULL-SNAPSHOT BASELINE" in loaded_from
@@ -1338,8 +1643,14 @@ def render_state_health_box() -> None:
         f"Root save: {legacy_exists} | Root backup: {legacy_backup_exists}"
     )
 
+    if st.session_state.get("startup_write_blocked", False):
+        st.info("Startup overwrite protection is active: opening the app did not copy any saved file over another saved file.")
+
+    if st.session_state.get("needs_force_save_to_spread_snapshot", False):
+        st.warning("A newer backup was loaded instead of the active primary file. Use Force Save State Now after checking the numbers to make this recovered snapshot active everywhere.")
+
     if st.session_state.get("version_mismatch_fixed", False):
-        st.info("Smart loader copied the best valid full snapshot into every save and backup location.")
+        st.info("State was normalized to the current app version in memory. It will be written only when you save.")
 
     if st.session_state.get("candidate_summary"):
         with st.expander("Valid full snapshots checked by smart loader"):
@@ -1616,26 +1927,29 @@ def render_holdings_editor() -> None:
 
     editor_key = f"portfolio_editor_v{st.session_state.get('editor_version', 0)}"
 
-    edited_df = st.data_editor(
-        st.session_state.editor_df,
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True,
-        key=editor_key,
-        column_config={
-            "ticker": st.column_config.TextColumn("Ticker"),
-            "qty": st.column_config.NumberColumn("Qty / Shares", format="%.6f"),
-            "avg_cost": st.column_config.NumberColumn("Avg Cost", format="$%.6f"),
-            "manual_price": st.column_config.NumberColumn("Manual / Fallback Price", format="$%.4f"),
-            "target_weight": st.column_config.NumberColumn("Target Weight %", format="%.2f"),
-            "annual_yield": st.column_config.NumberColumn("Annual Yield", format="%.4f"),
-            "payout_frequency": st.column_config.TextColumn("Payout Frequency"),
-            "payout_months": st.column_config.TextColumn("Payout Months"),
-            "notes": st.column_config.TextColumn("Notes"),
-        },
-    )
+    with st.form(f"holdings_editor_form_v{st.session_state.get('editor_version', 0)}"):
+        edited_df = st.data_editor(
+            st.session_state.editor_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            key=editor_key,
+            column_config={
+                "ticker": st.column_config.TextColumn("Ticker"),
+                "qty": st.column_config.NumberColumn("Qty / Shares", format="%.6f"),
+                "avg_cost": st.column_config.NumberColumn("Avg Cost", format="$%.6f"),
+                "manual_price": st.column_config.NumberColumn("Manual / Fallback Price", format="$%.4f"),
+                "target_weight": st.column_config.NumberColumn("Target Weight %", format="%.2f"),
+                "annual_yield": st.column_config.NumberColumn("Annual Yield", format="%.4f"),
+                "payout_frequency": st.column_config.TextColumn("Payout Frequency"),
+                "payout_months": st.column_config.TextColumn("Payout Months"),
+                "notes": st.column_config.TextColumn("Notes"),
+            },
+        )
 
-    if st.button("Save Holdings Changes", use_container_width=True):
+        save_holdings_pressed = st.form_submit_button("Save Holdings Changes", use_container_width=True)
+
+    if save_holdings_pressed:
         cleaned = normalize_portfolio_df(edited_df)
         st.session_state.portfolio_df = cleaned.copy()
         st.session_state.editor_df = cleaned.copy()
@@ -1645,7 +1959,7 @@ def render_holdings_editor() -> None:
         sync_editor_from_portfolio()
 
         if ok:
-            st.success("Holdings saved permanently as part of the full protected snapshot.")
+            st.success("Holdings saved and verified in the full protected snapshot.")
         else:
             st.error(f"Could not save holdings. Error: {st.session_state.last_save_error}")
 
@@ -1749,7 +2063,7 @@ def render_system_tools() -> None:
         "Backup, restore, reload, and safety tools."
     )
 
-    st.warning("Use Download Snapshot Backup before big changes. Old 396k/53k files should now be rejected as stale.")
+    st.warning("Use Download Snapshot Backup before big changes. The app now saves app-folder, home-folder, and embedded recovery copies; old v3/v4 and 396k / 53k files are rejected so stale holdings cannot win again.")
 
     c1, c2, c3 = st.columns(3)
 
@@ -1779,6 +2093,8 @@ def render_system_tools() -> None:
             apply_state_dict(loaded, "Reloaded from best valid full snapshot.")
             st.session_state.loaded_from = loaded.get("_loaded_from", "UNKNOWN")
             st.session_state.version_mismatch_fixed = bool(loaded.get("_version_mismatch_fixed", False))
+            st.session_state.startup_write_blocked = bool(loaded.get("_startup_write_blocked", False))
+            st.session_state.needs_force_save_to_spread_snapshot = bool(loaded.get("_needs_force_save_to_spread_snapshot", False))
             st.session_state.candidate_summary = loaded.get("_candidate_summary", [])
             st.session_state.rejected_summary = loaded.get("_rejected_summary", [])
             st.rerun()
@@ -1872,12 +2188,19 @@ def render_system_tools() -> None:
     st.caption(f"Root state file: {LEGACY_STATE_FILE}")
     st.caption(f"Root backup file: {LEGACY_BACKUP_FILE}")
     st.caption(f"Root last-good file: {LEGACY_LAST_GOOD_FILE}")
+    st.caption(f"Home state file: {HOME_STATE_FILE}")
+    st.caption(f"Home backup file: {HOME_BACKUP_FILE}")
+    st.caption(f"Home last-good file: {HOME_LAST_GOOD_FILE}")
+    st.caption(f"Embedded app-file snapshot exists: {bool(read_embedded_state_payload())}")
     st.caption(f"Hidden state exists: {STATE_FILE.exists()}")
     st.caption(f"Hidden backup exists: {BACKUP_FILE.exists()}")
     st.caption(f"Hidden last-good exists: {LAST_GOOD_FILE.exists()}")
     st.caption(f"Root state exists: {LEGACY_STATE_FILE.exists()}")
     st.caption(f"Root backup exists: {LEGACY_BACKUP_FILE.exists()}")
     st.caption(f"Root last-good exists: {LEGACY_LAST_GOOD_FILE.exists()}")
+    st.caption(f"Home state exists: {HOME_STATE_FILE.exists()}")
+    st.caption(f"Home backup exists: {HOME_BACKUP_FILE.exists()}")
+    st.caption(f"Home last-good exists: {HOME_LAST_GOOD_FILE.exists()}")
     st.caption(f"Last saved: {st.session_state.get('last_saved', 'not yet') or 'not yet'}")
     st.caption(f"Loaded from: {st.session_state.get('loaded_from', 'UNKNOWN')}")
     st.caption(f"Protected floor: {format_dollars(st.session_state.get('protected_min_contributions', 0.0))}")

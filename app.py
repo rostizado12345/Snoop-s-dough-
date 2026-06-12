@@ -2231,7 +2231,8 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    render_state_health_box()
+    with st.expander("Save Protection / State Details", expanded=False):
+        render_state_health_box()
 
     settings_cols = st.columns(3)
     with settings_cols[0]:

@@ -2276,24 +2276,26 @@ def main() -> None:
     )
 
     render_metrics(calc)
-    st.divider()
 
-    render_top_controls(calc)
-    st.divider()
+    with st.expander("Open to Edit / Update Holdings, Cash, Backups, and Details", expanded=False):
+        st.caption("Viewing mode stays protected while this is closed. Open only when you want to edit holdings, deploy cash, update cash/contributions, view detailed tables, or use backup/restore tools.")
 
-    render_deploy_cash(calc)
-    st.divider()
+        render_top_controls(calc)
+        st.divider()
 
-    render_holdings_editor()
-    st.divider()
+        render_deploy_cash(calc)
+        st.divider()
 
-    render_breakdowns(calc)
-    st.divider()
+        render_holdings_editor()
+        st.divider()
 
-    render_income_helper(calc)
-    st.divider()
+        render_breakdowns(calc)
+        st.divider()
 
-    render_system_tools()
+        render_income_helper(calc)
+        st.divider()
+
+        render_system_tools()
 
 
 if __name__ == "__main__":

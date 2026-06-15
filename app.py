@@ -16,7 +16,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-09-force-fidelity-holdings-recovery-v5-fidelity-verified-shares"
+APP_BASELINE_VERSION = "2026-06-15-auto-recovery-v6-extra-50000-protected"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -46,7 +46,7 @@ HOME_LAST_GOOD_FILE = HOME_STATE_DIR / "retirement_dashboard_state_last_good.jso
 # Last-resort portable snapshot. This is refreshed on Save when the app file is writable.
 EMBEDDED_SAVED_STATE_JSON = r'''{
   "state_schema_version": 2,
-  "app_baseline_version": "2026-06-09-force-fidelity-holdings-recovery-v5-fidelity-verified-shares",
+  "app_baseline_version": "2026-06-15-auto-recovery-v6-extra-50000-protected",
   "portfolio_df": [
     {
       "ticker": "AIPI",
@@ -192,20 +192,20 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
       "notes": ""
     }
   ],
-  "cash_fdrxx": 93912.21,
-  "total_contributions": 436299.07,
-  "protected_min_contributions": 436299.07,
+  "cash_fdrxx": 143912.21,
+  "total_contributions": 486299.07,
+  "protected_min_contributions": 486299.07,
   "use_live_prices": true,
   "auto_sync_prices": true,
   "last_price_sync": "",
-  "last_saved": "2026-06-09 11:59:59 PM",
-  "last_deploy_message": "Force-loaded Fidelity-verified shares recovery snapshot.",
-  "last_cash_message": "FDRXX cash baseline: $93,912.21."
+  "last_saved": "2026-06-15 11:59:59 AM",
+  "last_deploy_message": "Auto-recovery baseline includes the extra $50,000 in FDRXX.",
+  "last_cash_message": "FDRXX cash baseline: $143,912.21 after extra $50,000 add."
 }'''
 
-DEFAULT_CASH_FDRXX = 93912.21
-DEFAULT_TOTAL_CONTRIBUTIONS = 436299.07
-CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS = 436299.07
+DEFAULT_CASH_FDRXX = 143912.21
+DEFAULT_TOTAL_CONTRIBUTIONS = 486299.07
+CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS = 486299.07
 
 DEFAULT_COLUMNS = [
     "ticker", "qty", "avg_cost", "manual_price", "target_weight",
@@ -443,11 +443,26 @@ def make_payload_from_state(state: dict, force_timestamp: bool = False) -> dict:
     }
 
 
+def candidate_protected_value(item: dict) -> float:
+    """Money-protection score used by the smart loader.
+
+    The loader must not let a stale file with a newer timestamp beat a better
+    protected snapshot. New money raises Total Contributions and the protected
+    floor, so those values are ranked before saved time.
+    """
+    state = item["state"]
+    total = round_money(state.get("total_contributions", 0.0))
+    protected_min = round_money(state.get("protected_min_contributions", total))
+    return round_money(max(total, protected_min))
+
+
 def candidate_sort_key(item: dict) -> tuple:
+    state = item["state"]
     return (
-        1 if item["state"].get("state_schema_version", 1) >= STATE_SCHEMA_VERSION else 0,
+        1 if state.get("state_schema_version", 1) >= STATE_SCHEMA_VERSION else 0,
+        candidate_protected_value(item),
+        round_money(state.get("total_contributions", 0.0)),
         item["last_saved_dt"],
-        round_money(item["state"].get("total_contributions", 0.0)),
     )
 
 
@@ -456,20 +471,14 @@ def is_candidate_valid(item: dict) -> bool:
     schema_version = int(state.get("state_schema_version", 1))
     total = round_money(state.get("total_contributions", 0.0))
     protected_min = round_money(state.get("protected_min_contributions", total))
-    app_version = str(state.get("app_baseline_version", ""))
-
-    # v5 protection: old saved JSON files can have the right contribution floor
-    # but the wrong holdings table. That was the cause of the holdings coming
-    # back after reload. Only current-version full snapshots are allowed to win
-    # automatically. The embedded v5 recovery snapshot below is the bridge from
-    # the old v3 files into the corrected Fidelity holdings.
-    if app_version != APP_BASELINE_VERSION:
-        return False
 
     if schema_version < STATE_SCHEMA_VERSION:
         return False
 
-    return total >= protected_min and total >= CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS
+    if total < protected_min:
+        return False
+
+    return total >= CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS
 
 
 def write_payload_everywhere(payload: dict) -> None:
@@ -490,12 +499,12 @@ def write_payload_everywhere(payload: dict) -> None:
 
 def load_state() -> dict:
     """
-    Load the safest saved full snapshot without rewriting saved files during startup.
+    Load the safest saved full snapshot and auto-promote recovered snapshots after validation.
 
     Important protection:
-    - Opening/reloading the app must NOT copy a stale primary file over backup files.
-    - The newest valid full snapshot may win over the primary file if the primary is older.
-    - Files are only rewritten by an explicit save, restore, deploy, cash change, or price sync.
+    - The highest protected contribution snapshot wins before saved-time order.
+    - Good snapshots from older app versions are accepted and normalized forward.
+    - When recovery picks a backup/embedded snapshot, it is automatically promoted everywhere.
     """
     errors = []
     candidates = []
@@ -583,15 +592,34 @@ def load_state() -> dict:
         loaded["app_baseline_version"] = APP_BASELINE_VERSION
         loaded["state_schema_version"] = STATE_SCHEMA_VERSION
         loaded["protected_min_contributions"] = normalized_payload["protected_min_contributions"]
-        loaded["_loaded_from"] = loaded_from
-        loaded["_version_mismatch_fixed"] = (
+
+        version_mismatch_fixed = (
             original_app_version != APP_BASELINE_VERSION
             or original_schema_version != STATE_SCHEMA_VERSION
         )
+        auto_repair_performed = False
+        auto_repair_error = ""
+
+        should_promote = best["path"] != STATE_FILE or primary is None or version_mismatch_fixed
+        if should_promote:
+            try:
+                promoted_payload = make_payload_from_state(loaded, force_timestamp=True)
+                write_payload_everywhere(promoted_payload)
+                loaded = normalize_state_payload(promoted_payload)
+                loaded_from = f"{loaded_from} | AUTO-REPAIRED AND PROMOTED TO ALL SAVE LOCATIONS"
+                auto_repair_performed = True
+            except Exception as exc:
+                auto_repair_error = str(exc)
+                errors.append(f"Automatic promotion failed: {exc}")
+
+        loaded["_loaded_from"] = loaded_from
+        loaded["_version_mismatch_fixed"] = version_mismatch_fixed
+        loaded["_auto_repair_performed"] = auto_repair_performed
+        loaded["_auto_repair_error"] = auto_repair_error
         loaded["_active_state_file"] = str(STATE_FILE)
         loaded["_load_errors"] = errors
         loaded["_candidate_summary"] = [
-            f"{c['path']} | {'SELECTED' if c is best else 'checked only - not overwritten'} | schema {c['state'].get('state_schema_version', 1)} | "
+            f"{c['path']} | {'SELECTED' if c is best else 'checked only'} | schema {c['state'].get('state_schema_version', 1)} | "
             f"contributions {format_dollars(c['state'].get('total_contributions', 0.0))} | "
             f"protected floor {format_dollars(c['state'].get('protected_min_contributions', 0.0))} | "
             f"cash {format_dollars(c['state'].get('cash_fdrxx', 0.0))} | "
@@ -599,8 +627,8 @@ def load_state() -> dict:
             for c in sorted(candidates, key=candidate_sort_key, reverse=True)
         ]
         loaded["_rejected_summary"] = rejected
-        loaded["_startup_write_blocked"] = True
-        loaded["_needs_force_save_to_spread_snapshot"] = best["path"] != STATE_FILE
+        loaded["_startup_write_blocked"] = not auto_repair_performed
+        loaded["_needs_force_save_to_spread_snapshot"] = False
         return loaded
 
     state = baseline_state_payload()
@@ -800,6 +828,8 @@ def init_state() -> None:
     st.session_state.version_mismatch_fixed = bool(loaded.get("_version_mismatch_fixed", False))
     st.session_state.startup_write_blocked = bool(loaded.get("_startup_write_blocked", False))
     st.session_state.needs_force_save_to_spread_snapshot = bool(loaded.get("_needs_force_save_to_spread_snapshot", False))
+    st.session_state.auto_repair_performed = bool(loaded.get("_auto_repair_performed", False))
+    st.session_state.auto_repair_error = str(loaded.get("_auto_repair_error", ""))
     st.session_state.active_state_file = str(STATE_FILE)
     st.session_state.load_errors = loaded.get("_load_errors", [])
     st.session_state.candidate_summary = loaded.get("_candidate_summary", [])
@@ -1643,14 +1673,20 @@ def render_state_health_box() -> None:
         f"Root save: {legacy_exists} | Root backup: {legacy_backup_exists}"
     )
 
+    if st.session_state.get("auto_repair_performed", False):
+        st.success("Automatic recovery ran: the best protected snapshot was promoted to every save and backup location.")
+
+    if st.session_state.get("auto_repair_error", ""):
+        st.error(f"Automatic recovery could not write everywhere: {st.session_state.auto_repair_error}")
+
     if st.session_state.get("startup_write_blocked", False):
-        st.info("Startup overwrite protection is active: opening the app did not copy any saved file over another saved file.")
+        st.info("Startup protection checked saved files without promoting anything because the active file already matched the best protected snapshot.")
 
     if st.session_state.get("needs_force_save_to_spread_snapshot", False):
-        st.warning("A newer backup was loaded instead of the active primary file. Use Force Save State Now after checking the numbers to make this recovered snapshot active everywhere.")
+        st.warning("A newer protected snapshot was loaded. Automatic recovery should normally promote it everywhere; use Force Save State Now only if this warning remains.")
 
     if st.session_state.get("version_mismatch_fixed", False):
-        st.info("State was normalized to the current app version in memory. It will be written only when you save.")
+        st.info("State was normalized to the current app version and automatic recovery will preserve it.")
 
     if st.session_state.get("candidate_summary"):
         with st.expander("Valid full snapshots checked by smart loader"):
@@ -2063,7 +2099,7 @@ def render_system_tools() -> None:
         "Backup, restore, reload, and safety tools."
     )
 
-    st.warning("Use Download Snapshot Backup before big changes. The app now saves app-folder, home-folder, and embedded recovery copies; old v3/v4 and 396k / 53k files are rejected so stale holdings cannot win again.")
+    st.warning("Use Download Snapshot Backup before big changes. The app now saves app-folder, home-folder, and embedded recovery copies; old lower-contribution files are rejected and the highest protected snapshot wins automatically.")
 
     c1, c2, c3 = st.columns(3)
 
@@ -2227,7 +2263,7 @@ def main() -> None:
 
     st.markdown('<div class="dashboard-title">Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="dashboard-subtitle">Regular production app &#8226; full-snapshot protection &#8226; stale-save rejection &#8226; restore recovery.</div>',
+        '<div class="dashboard-subtitle">Regular production app &#8226; full-snapshot protection &#8226; automatic recovery &#8226; stale-save rejection.</div>',
         unsafe_allow_html=True,
     )
 

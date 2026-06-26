@@ -16,7 +16,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-15-auto-recovery-v6-extra-50000-protected"
+APP_BASELINE_VERSION = "2026-06-25-save-auto-backup-loader-v7"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -566,16 +566,16 @@ def load_state() -> dict:
 
     if candidates:
         primary = next((item for item in candidates if item["is_primary"]), None)
-        newest = sorted(candidates, key=candidate_sort_key, reverse=True)[0]
+        ranked_candidates = sorted(candidates, key=candidate_sort_key, reverse=True)
+        best = ranked_candidates[0]
 
-        # If the active primary is current or tied for newest, keep it.
-        # If another valid snapshot is newer, recover from that instead.
-        if primary is not None and primary["last_saved_dt"] >= newest["last_saved_dt"]:
+        # Pick the strongest protected snapshot first, then the newest one.
+        # Do not let a stale primary file win just because it was touched later.
+        if primary is not None and candidate_sort_key(primary) == candidate_sort_key(best):
             best = primary
             loaded_from = f"PRIMARY ACTIVE FULL SNAPSHOT SELECTED: {primary['path']}"
         else:
-            best = newest
-            loaded_from = f"BEST VALID FULL SNAPSHOT SELECTED: {best['path']}"
+            loaded_from = f"BEST PROTECTED FULL SNAPSHOT SELECTED: {best['path']}"
 
         loaded = best["state"]
 
@@ -733,18 +733,20 @@ def save_state() -> bool:
 
         write_payload_everywhere(payload)
 
-        verify = normalize_state_payload(read_json_file(STATE_FILE))
-        if round_money(verify.get("cash_fdrxx", -1)) != round_money(payload["cash_fdrxx"]):
-            raise RuntimeError("Save verification failed: cash did not match after write.")
-        if round_money(verify.get("total_contributions", -1)) != round_money(payload["total_contributions"]):
-            raise RuntimeError("Save verification failed: contributions did not match after write.")
-        if round_money(verify.get("protected_min_contributions", -1)) != round_money(payload["protected_min_contributions"]):
-            raise RuntimeError("Save verification failed: protected floor did not match after write.")
-
-        saved_holdings = portfolio_save_signature(verify.get("portfolio_df", []))
         intended_holdings = portfolio_save_signature(payload["portfolio_df"])
-        if saved_holdings != intended_holdings:
-            raise RuntimeError("Save verification failed: holdings did not match after write.")
+
+        for verify_path in candidate_state_files():
+            verify = normalize_state_payload(read_json_file(verify_path))
+            if round_money(verify.get("cash_fdrxx", -1)) != round_money(payload["cash_fdrxx"]):
+                raise RuntimeError(f"Save verification failed for {verify_path}: cash did not match after write.")
+            if round_money(verify.get("total_contributions", -1)) != round_money(payload["total_contributions"]):
+                raise RuntimeError(f"Save verification failed for {verify_path}: contributions did not match after write.")
+            if round_money(verify.get("protected_min_contributions", -1)) != round_money(payload["protected_min_contributions"]):
+                raise RuntimeError(f"Save verification failed for {verify_path}: protected floor did not match after write.")
+
+            saved_holdings = portfolio_save_signature(verify.get("portfolio_df", []))
+            if saved_holdings != intended_holdings:
+                raise RuntimeError(f"Save verification failed for {verify_path}: holdings did not match after write.")
 
         st.session_state.protected_min_contributions = payload["protected_min_contributions"]
         st.session_state.last_saved = payload["last_saved"]
@@ -965,9 +967,15 @@ def calculate_portfolio(df: pd.DataFrame, cash_fdrxx: float, use_live_prices: bo
     }
 
 
-def refresh_saved_manual_prices(calc_df: pd.DataFrame) -> None:
+def refresh_saved_manual_prices(calc_df: pd.DataFrame, persist: bool = False) -> bool:
+    """Refresh manual fallback prices from good live prices.
+
+    Safety rule: normal page loading must not silently save the whole dashboard.
+    A passive live-price refresh can touch prices, but it should only become
+    permanent when the user presses Sync Prices Now or another explicit Save.
+    """
     if not bool(st.session_state.auto_sync_prices):
-        return
+        return False
 
     df = normalize_portfolio_df(st.session_state.portfolio_df.copy())
     changed = False
@@ -992,7 +1000,10 @@ def refresh_saved_manual_prices(calc_df: pd.DataFrame) -> None:
         st.session_state.portfolio_df = normalize_portfolio_df(df)
         st.session_state.editor_df = normalize_portfolio_df(df.copy())
         st.session_state.last_price_sync = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
-        save_state()
+        if persist:
+            save_state()
+
+    return changed
 
 
 def add_new_money(amount: float) -> None:
@@ -2099,7 +2110,7 @@ def render_system_tools() -> None:
         "Backup, restore, reload, and safety tools."
     )
 
-    st.warning("Use Download Snapshot Backup before big changes. The app now saves app-folder, home-folder, and embedded recovery copies; old lower-contribution files are rejected and the highest protected snapshot wins automatically.")
+    st.warning("Every Save button now writes the main save, backup, last-good, home copies, root copies, and embedded recovery snapshot automatically. Use Download Snapshot Backup only when you want an outside copy before big changes.")
 
     c1, c2, c3 = st.columns(3)
 
@@ -2263,7 +2274,7 @@ def main() -> None:
 
     st.markdown('<div class="dashboard-title">Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="dashboard-subtitle">Regular production app &#8226; full-snapshot protection &#8226; automatic recovery &#8226; stale-save rejection.</div>',
+        '<div class="dashboard-subtitle">Regular production app &#8226; one-click save + backup &#8226; protected recovery &#8226; stale-save rejection.</div>',
         unsafe_allow_html=True,
     )
 
@@ -2279,7 +2290,7 @@ def main() -> None:
             st.rerun()
 
     with settings_cols[1]:
-        new_auto_sync = st.checkbox("Auto-save good live prices as fallback", value=bool(st.session_state.auto_sync_prices))
+        new_auto_sync = st.checkbox("Refresh good live prices on screen", value=bool(st.session_state.auto_sync_prices))
         if new_auto_sync != st.session_state.auto_sync_prices:
             st.session_state.auto_sync_prices = new_auto_sync
             save_state()
@@ -2288,6 +2299,12 @@ def main() -> None:
     with settings_cols[2]:
         if st.button("Sync Prices Now", use_container_width=True):
             get_live_prices_cached.clear()
+            sync_calc = calculate_portfolio(
+                st.session_state.portfolio_df,
+                cash_fdrxx=st.session_state.cash_fdrxx,
+                use_live_prices=bool(st.session_state.use_live_prices),
+            )
+            refresh_saved_manual_prices(sync_calc["df"], persist=True)
             st.session_state.last_price_sync = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
             save_state()
             st.rerun()
@@ -2298,7 +2315,10 @@ def main() -> None:
         use_live_prices=bool(st.session_state.use_live_prices),
     )
 
-    refresh_saved_manual_prices(calc["df"])
+    # Passive page loads may refresh the on-screen fallback prices, but they do not
+    # write a new full snapshot. This prevents a stale state from being preserved
+    # just because Yahoo live prices changed.
+    refresh_saved_manual_prices(calc["df"], persist=False)
 
     calc = calculate_portfolio(
         st.session_state.portfolio_df,

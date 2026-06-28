@@ -1,8 +1,10 @@
-import ast
+import base64
 import json
 import os
 import re
-import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
@@ -18,7 +20,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-26-save-revert-proof-loader-v8"
+APP_BASELINE_VERSION = "2026-06-28-github-cloud-persistence-v8"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -37,6 +39,10 @@ LAST_GOOD_FILE = STATE_DIR / "retirement_dashboard_state_last_good.json"
 LEGACY_STATE_FILE = APP_DIR / "retirement_dashboard_state.json"
 LEGACY_BACKUP_FILE = APP_DIR / "retirement_dashboard_state_backup.json"
 LEGACY_LAST_GOOD_FILE = APP_DIR / "retirement_dashboard_state_last_good.json"
+
+# Cloud save file inside GitHub. This is the durable Streamlit Cloud copy.
+# Secrets expected in Streamlit: GITHUB_TOKEN, GITHUB_REPO, GITHUB_BRANCH.
+GITHUB_STATE_DEFAULT_PATH = "retirement_dashboard_state.json"
 
 # Home-folder copies survive app filename changes, Downloads-folder copies, and most local reruns.
 HOME_STATE_DIR = Path.home() / ".retirement_dashboard_state"
@@ -254,28 +260,6 @@ def to_float(value, default: float = 0.0) -> float:
         return default
 
 
-def to_bool(value, default: bool = True) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return default
-    if isinstance(value, str):
-        cleaned = value.strip().lower()
-        if cleaned in {"true", "1", "yes", "y", "on"}:
-            return True
-        if cleaned in {"false", "0", "no", "n", "off"}:
-            return False
-    try:
-        return bool(value)
-    except Exception:
-        return default
-
-
-def current_save_stamp() -> tuple[str, int]:
-    now = datetime.now()
-    return now.strftime("%Y-%m-%d %I:%M:%S.%f %p"), time.time_ns()
-
-
 def round_money(value: float) -> float:
     return round(float(value), 2)
 
@@ -293,32 +277,12 @@ def format_percent(value: float) -> str:
 
 
 def parse_saved_time(value: str) -> datetime:
-    for fmt in [
-        "%Y-%m-%d %I:%M:%S.%f %p",
-        "%Y-%m-%d %H:%M:%S.%f",
-        "%Y-%m-%d %I:%M:%S %p",
-        "%Y-%m-%d %H:%M:%S",
-    ]:
+    for fmt in ["%Y-%m-%d %I:%M:%S %p", "%Y-%m-%d %H:%M:%S"]:
         try:
             return datetime.strptime(str(value), fmt)
         except Exception:
             pass
     return datetime.min
-
-
-def saved_epoch_from_state(state: dict) -> int:
-    raw_epoch = int(to_float(state.get("last_saved_epoch", 0), 0))
-    if raw_epoch > 0:
-        return raw_epoch
-
-    parsed = parse_saved_time(state.get("last_saved", ""))
-    if parsed == datetime.min:
-        return 0
-
-    try:
-        return int(parsed.timestamp() * 1_000_000_000)
-    except Exception:
-        return 0
 
 
 def normalize_portfolio_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -348,7 +312,7 @@ def get_default_portfolio_df() -> pd.DataFrame:
 
 
 def baseline_state_payload() -> dict:
-    now, now_epoch = current_save_stamp()
+    now = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
     return {
         "state_schema_version": STATE_SCHEMA_VERSION,
         "app_baseline_version": APP_BASELINE_VERSION,
@@ -360,7 +324,6 @@ def baseline_state_payload() -> dict:
         "auto_sync_prices": True,
         "last_price_sync": "",
         "last_saved": now,
-        "last_saved_epoch": now_epoch,
         "last_deploy_message": "Loaded current protected full-snapshot production baseline.",
         "last_cash_message": f"FDRXX cash baseline: {format_dollars(DEFAULT_CASH_FDRXX)}.",
     }
@@ -368,14 +331,7 @@ def baseline_state_payload() -> dict:
 
 def normalize_state_payload(raw: dict) -> dict:
     records = raw.get("portfolio_df", raw.get("portfolio", []))
-    if isinstance(records, pd.DataFrame):
-        portfolio_df = normalize_portfolio_df(records)
-    elif records is None:
-        portfolio_df = get_default_portfolio_df()
-    elif isinstance(records, list) and len(records) == 0:
-        portfolio_df = get_default_portfolio_df()
-    else:
-        portfolio_df = normalize_portfolio_df(pd.DataFrame(records))
+    portfolio_df = normalize_portfolio_df(pd.DataFrame(records)) if records else get_default_portfolio_df()
 
     schema_version = int(to_float(raw.get("state_schema_version", 1), 1))
     total_contributions = round_money(
@@ -394,11 +350,10 @@ def normalize_state_payload(raw: dict) -> dict:
         "cash_fdrxx": round_money(to_float(raw.get("cash_fdrxx", raw.get("cash", DEFAULT_CASH_FDRXX)), DEFAULT_CASH_FDRXX)),
         "total_contributions": total_contributions,
         "protected_min_contributions": protected_min,
-        "use_live_prices": to_bool(raw.get("use_live_prices", True), True),
-        "auto_sync_prices": to_bool(raw.get("auto_sync_prices", True), True),
+        "use_live_prices": bool(raw.get("use_live_prices", True)),
+        "auto_sync_prices": bool(raw.get("auto_sync_prices", True)),
         "last_price_sync": str(raw.get("last_price_sync", "")),
         "last_saved": str(raw.get("last_saved", "")),
-        "last_saved_epoch": saved_epoch_from_state(raw),
         "last_deploy_message": str(raw.get("last_deploy_message", "")),
         "last_cash_message": str(raw.get("last_cash_message", "")),
     }
@@ -428,39 +383,157 @@ def read_embedded_state_payload() -> dict:
         return {}
 
 
-def write_embedded_state_payload(payload: dict) -> bool:
-    '''Refresh the portable snapshot inside this .py file and verify it.
+def write_embedded_state_payload(payload: dict) -> None:
+    """Best-effort: refresh the portable snapshot inside this .py file.
 
-    Normal JSON files remain the primary save system. The embedded copy is a
-    last-resort recovery layer for cases where sidecar JSON files vanish or the
-    app is opened from a different folder/name. Returning False tells the UI not
-    to pretend the portable copy was refreshed when the app file is read-only.
-    '''
+    Normal JSON files are still the primary save system. This embedded copy is
+    only a last-resort recovery layer for cases where sidecar JSON files vanish
+    or the app is opened from a different folder/name. If the app file is
+    read-only, this safely does nothing.
+    """
     try:
         app_file = Path(__file__).resolve()
         source = app_file.read_text(encoding="utf-8")
-        embedded_pattern = (
-            r"EMBEDDED_SAVED_STATE_JSON\s*=\s*"
-            r"(?:r?'''[\s\S]*?'''|r?\"\"\"[\s\S]*?\"\"\"|'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\")"
+        replacement = "EMBEDDED_SAVED_STATE_JSON = r'''" + json.dumps(payload, indent=2) + "'''"
+        updated, count = re.subn(
+            r"EMBEDDED_SAVED_STATE_JSON\s*=\s*r'''[\s\S]*?'''",
+            replacement,
+            source,
+            count=1,
         )
-        replacement = "EMBEDDED_SAVED_STATE_JSON = " + repr(json.dumps(payload, indent=2))
-        updated, count = re.subn(embedded_pattern, lambda _match: replacement, source, count=1)
-        if count != 1:
-            return False
-        if updated != source:
+        if count == 1 and updated != source:
             app_file.write_text(updated, encoding="utf-8")
-
-        reread = app_file.read_text(encoding="utf-8")
-        match = re.search(embedded_pattern, reread)
-        if not match:
-            return False
-        literal = match.group(0).split("=", 1)[1].strip()
-        embedded_json = ast.literal_eval(literal)
-        embedded = normalize_state_payload(json.loads(embedded_json))
-        expected = normalize_state_payload(payload)
-        return snapshot_core_signature(embedded) == snapshot_core_signature(expected)
     except Exception:
-        return False
+        pass
+
+
+
+def get_streamlit_secret(name: str, default: str = "") -> str:
+    """Read a Streamlit secret without ever displaying the secret value."""
+    try:
+        value = st.secrets.get(name, default)
+    except Exception:
+        return default
+
+    if value is None:
+        return default
+    return str(value).strip()
+
+
+def get_github_persistence_config() -> dict:
+    token = get_streamlit_secret("GITHUB_TOKEN")
+    repo = get_streamlit_secret("GITHUB_REPO")
+    branch = get_streamlit_secret("GITHUB_BRANCH", "main")
+    state_path = get_streamlit_secret("GITHUB_STATE_PATH", GITHUB_STATE_DEFAULT_PATH)
+
+    configured = bool(token and repo and "/" in repo and branch and state_path)
+    return {
+        "configured": configured,
+        "token": token,
+        "repo": repo,
+        "branch": branch,
+        "state_path": state_path,
+    }
+
+
+def github_persistence_summary() -> str:
+    cfg = get_github_persistence_config()
+    if not cfg["configured"]:
+        return "not configured"
+    return f"configured: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+
+
+def github_contents_url(cfg: dict, include_ref: bool = False) -> str:
+    encoded_path = urllib.parse.quote(cfg["state_path"], safe="/")
+    url = f"https://api.github.com/repos/{cfg['repo']}/contents/{encoded_path}"
+    if include_ref:
+        url += "?ref=" + urllib.parse.quote(cfg["branch"], safe="")
+    return url
+
+
+def github_api_json(cfg: dict, method: str, url: str, body: dict | None = None) -> dict:
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {cfg['token']}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": "application/json",
+            "User-Agent": "retirement-dashboard-streamlit",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            raw = resp.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8")
+        except Exception:
+            detail = str(exc)
+        raise RuntimeError(f"GitHub API {method} failed with HTTP {exc.code}: {detail}") from exc
+
+
+def github_get_file_metadata(cfg: dict) -> dict | None:
+    try:
+        return github_api_json(cfg, "GET", github_contents_url(cfg, include_ref=True))
+    except RuntimeError as exc:
+        if "HTTP 404" in str(exc):
+            return None
+        raise
+
+
+def read_github_state_payload() -> tuple[dict, str]:
+    cfg = get_github_persistence_config()
+    if not cfg["configured"]:
+        return {}, "GitHub persistence not configured"
+
+    try:
+        meta = github_get_file_metadata(cfg)
+        if not meta:
+            return {}, f"No GitHub state file yet at {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+
+        encoded = str(meta.get("content", "")).replace("\n", "")
+        if not encoded:
+            return {}, "GitHub state file exists but has no content"
+
+        decoded = base64.b64decode(encoded.encode("utf-8")).decode("utf-8")
+        return json.loads(decoded), f"Loaded GitHub state from {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+    except Exception as exc:
+        return {}, f"GitHub load failed: {exc}"
+
+
+def write_github_state_payload(payload: dict) -> tuple[bool, str]:
+    cfg = get_github_persistence_config()
+    if not cfg["configured"]:
+        return False, "GitHub persistence not configured. Add GITHUB_TOKEN, GITHUB_REPO, and GITHUB_BRANCH in Streamlit Secrets."
+
+    try:
+        meta = github_get_file_metadata(cfg)
+        sha = meta.get("sha") if meta else None
+
+        clean_payload = make_payload_from_state(payload, force_timestamp=False)
+        content = base64.b64encode(json.dumps(clean_payload, indent=2).encode("utf-8")).decode("utf-8")
+        body = {
+            "message": f"Save retirement dashboard state {clean_payload.get('last_saved', '')}",
+            "content": content,
+            "branch": cfg["branch"],
+        }
+        if sha:
+            body["sha"] = sha
+
+        github_api_json(cfg, "PUT", github_contents_url(cfg, include_ref=False), body=body)
+        return True, f"GitHub cloud save verified: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+    except Exception as exc:
+        return False, f"GitHub cloud save failed: {exc}"
 
 
 def candidate_state_files() -> List[Path]:
@@ -478,11 +551,14 @@ def candidate_state_files() -> List[Path]:
 
 
 def make_payload_from_state(state: dict, force_timestamp: bool = False) -> dict:
-    df = normalize_portfolio_df(state["portfolio_df"])
+    source_df = state["portfolio_df"]
+    if isinstance(source_df, pd.DataFrame):
+        df = normalize_portfolio_df(source_df)
+    else:
+        df = normalize_portfolio_df(pd.DataFrame(source_df))
     saved_time = str(state.get("last_saved", ""))
-    saved_epoch = int(to_float(state.get("last_saved_epoch", 0), 0))
-    if force_timestamp or saved_time.strip() == "" or saved_epoch <= 0:
-        saved_time, saved_epoch = current_save_stamp()
+    if force_timestamp or saved_time.strip() == "":
+        saved_time = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
 
     total_contributions = round_money(state["total_contributions"])
     protected_min = round_money(
@@ -503,30 +579,9 @@ def make_payload_from_state(state: dict, force_timestamp: bool = False) -> dict:
         "auto_sync_prices": bool(state.get("auto_sync_prices", True)),
         "last_price_sync": str(state.get("last_price_sync", "")),
         "last_saved": saved_time,
-        "last_saved_epoch": saved_epoch,
         "last_deploy_message": str(state.get("last_deploy_message", "")),
         "last_cash_message": str(state.get("last_cash_message", "")),
     }
-
-
-def snapshot_core_signature(state: dict) -> str:
-    """Stable signature for the saved dashboard numbers, excluding timestamps.
-
-    This lets the loader detect stale backup siblings even when the active save
-    file is already the winner, so old backups get overwritten before they can
-    become tomorrow's accidental rollback.
-    """
-    normalized = normalize_state_payload(state)
-    core = {
-        "state_schema_version": STATE_SCHEMA_VERSION,
-        "portfolio_df": portfolio_save_signature(normalized.get("portfolio_df", [])),
-        "cash_fdrxx": round_money(normalized.get("cash_fdrxx", 0.0)),
-        "total_contributions": round_money(normalized.get("total_contributions", 0.0)),
-        "protected_min_contributions": round_money(normalized.get("protected_min_contributions", 0.0)),
-        "use_live_prices": to_bool(normalized.get("use_live_prices", True), True),
-        "auto_sync_prices": to_bool(normalized.get("auto_sync_prices", True), True),
-    }
-    return json.dumps(core, sort_keys=True, separators=(",", ":"))
 
 
 def candidate_protected_value(item: dict) -> float:
@@ -548,7 +603,6 @@ def candidate_sort_key(item: dict) -> tuple:
         1 if state.get("state_schema_version", 1) >= STATE_SCHEMA_VERSION else 0,
         candidate_protected_value(item),
         round_money(state.get("total_contributions", 0.0)),
-        int(item.get("last_saved_epoch", 0)),
         item["last_saved_dt"],
     )
 
@@ -568,7 +622,7 @@ def is_candidate_valid(item: dict) -> bool:
     return total >= CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS
 
 
-def write_payload_everywhere(payload: dict) -> bool:
+def write_payload_everywhere(payload: dict) -> None:
     write_json_atomic(STATE_FILE, payload)
     write_json_atomic(BACKUP_FILE, payload)
     write_json_atomic(LAST_GOOD_FILE, payload)
@@ -581,7 +635,7 @@ def write_payload_everywhere(payload: dict) -> bool:
     write_json_atomic(LEGACY_BACKUP_FILE, payload)
     write_json_atomic(LEGACY_LAST_GOOD_FILE, payload)
 
-    return write_embedded_state_payload(payload)
+    write_embedded_state_payload(payload)
 
 
 def load_state() -> dict:
@@ -605,7 +659,6 @@ def load_state() -> dict:
                 "path": path,
                 "state": loaded,
                 "last_saved_dt": parse_saved_time(loaded.get("last_saved", "")),
-                "last_saved_epoch": saved_epoch_from_state(loaded),
                 "is_primary": path == STATE_FILE,
             }
 
@@ -639,7 +692,6 @@ def load_state() -> dict:
                 "path": Path("EMBEDDED_APP_FILE_SNAPSHOT"),
                 "state": embedded_loaded,
                 "last_saved_dt": parse_saved_time(embedded_loaded.get("last_saved", "")),
-                "last_saved_epoch": saved_epoch_from_state(embedded_loaded),
                 "is_primary": False,
             }
             if is_candidate_valid(embedded_item):
@@ -652,6 +704,27 @@ def load_state() -> dict:
                 )
         except Exception as exc:
             errors.append(f"EMBEDDED_APP_FILE_SNAPSHOT: {exc}")
+
+    github_raw, github_status = read_github_state_payload()
+    if github_raw:
+        try:
+            github_loaded = normalize_state_payload(github_raw)
+            github_item = {
+                "path": Path("GITHUB_REPO_STATE"),
+                "state": github_loaded,
+                "last_saved_dt": parse_saved_time(github_loaded.get("last_saved", "")),
+                "is_primary": False,
+            }
+            if is_candidate_valid(github_item):
+                candidates.append(github_item)
+            else:
+                rejected.append(
+                    f"GITHUB_REPO_STATE | rejected stale/unsafe | contributions {format_dollars(github_loaded.get('total_contributions', 0.0))} | "
+                    f"protected floor {format_dollars(github_loaded.get('protected_min_contributions', 0.0))} | "
+                    f"schema {github_loaded.get('state_schema_version', 1)} | saved {github_loaded.get('last_saved', '') or 'unknown'}"
+                )
+        except Exception as exc:
+            github_status = f"GitHub state normalization failed: {exc}"
 
     if candidates:
         primary = next((item for item in candidates if item["is_primary"]), None)
@@ -688,29 +761,14 @@ def load_state() -> dict:
         )
         auto_repair_performed = False
         auto_repair_error = ""
-        embedded_write_ok = None
 
-        best_signature = snapshot_core_signature(loaded)
-        stale_valid_siblings_found = any(
-            snapshot_core_signature(c["state"]) != best_signature
-            for c in candidates
-        )
-
-        should_promote = (
-            best["path"] != STATE_FILE
-            or primary is None
-            or version_mismatch_fixed
-            or stale_valid_siblings_found
-        )
+        should_promote = best["path"] != STATE_FILE or primary is None or version_mismatch_fixed
         if should_promote:
             try:
                 promoted_payload = make_payload_from_state(loaded, force_timestamp=True)
-                embedded_write_ok = write_payload_everywhere(promoted_payload)
+                write_payload_everywhere(promoted_payload)
                 loaded = normalize_state_payload(promoted_payload)
-                if embedded_write_ok:
-                    loaded_from = f"{loaded_from} | AUTO-REPAIRED AND PROMOTED TO ALL SAVE LOCATIONS"
-                else:
-                    loaded_from = f"{loaded_from} | AUTO-REPAIRED JSON SAVE FILES; EMBEDDED PORTABLE COPY NOT WRITABLE"
+                loaded_from = f"{loaded_from} | AUTO-REPAIRED AND PROMOTED TO ALL SAVE LOCATIONS"
                 auto_repair_performed = True
             except Exception as exc:
                 auto_repair_error = str(exc)
@@ -720,8 +778,7 @@ def load_state() -> dict:
         loaded["_version_mismatch_fixed"] = version_mismatch_fixed
         loaded["_auto_repair_performed"] = auto_repair_performed
         loaded["_auto_repair_error"] = auto_repair_error
-        loaded["_embedded_write_ok"] = embedded_write_ok
-        loaded["_stale_valid_siblings_found"] = stale_valid_siblings_found
+        loaded["_github_load_status"] = github_status
         loaded["_active_state_file"] = str(STATE_FILE)
         loaded["_load_errors"] = errors
         loaded["_candidate_summary"] = [
@@ -741,25 +798,22 @@ def load_state() -> dict:
     payload = make_payload_from_state(state, force_timestamp=True)
 
     # First-run only: no saved state exists, so create the initial protected baseline.
-    embedded_write_ok = write_payload_everywhere(payload)
+    write_payload_everywhere(payload)
 
     state["_loaded_from"] = "CURRENT PROTECTED FULL-SNAPSHOT BASELINE - no valid saved file found"
     state["_version_mismatch_fixed"] = False
     state["_active_state_file"] = str(STATE_FILE)
-    state["_embedded_write_ok"] = embedded_write_ok
-    state["_stale_valid_siblings_found"] = False
+    state["_github_load_status"] = github_status
     state["_load_errors"] = errors
     state["_candidate_summary"] = []
     state["_rejected_summary"] = rejected
     state["_startup_write_blocked"] = False
     state["_needs_force_save_to_spread_snapshot"] = False
     state["last_saved"] = payload["last_saved"]
-    state["last_saved_epoch"] = payload["last_saved_epoch"]
     return state
 
 def make_state_payload() -> dict:
     df = normalize_portfolio_df(st.session_state.portfolio_df.copy())
-    saved_time, saved_epoch = current_save_stamp()
     total_contributions = round_money(st.session_state.total_contributions)
     protected_min = round_money(
         st.session_state.get(
@@ -778,8 +832,7 @@ def make_state_payload() -> dict:
         "use_live_prices": bool(st.session_state.use_live_prices),
         "auto_sync_prices": bool(st.session_state.auto_sync_prices),
         "last_price_sync": str(st.session_state.last_price_sync),
-        "last_saved": saved_time,
-        "last_saved_epoch": saved_epoch,
+        "last_saved": datetime.now().strftime("%Y-%m-%d %I:%M:%S %p"),
         "last_deploy_message": str(st.session_state.get("last_deploy_message", "")),
         "last_cash_message": str(st.session_state.get("last_cash_message", "")),
     }
@@ -842,7 +895,7 @@ def save_state() -> bool:
         else:
             payload["protected_min_contributions"] = round_money(max(existing_floor, current_total))
 
-        embedded_write_ok = write_payload_everywhere(payload)
+        write_payload_everywhere(payload)
 
         intended_holdings = portfolio_save_signature(payload["portfolio_df"])
 
@@ -854,23 +907,20 @@ def save_state() -> bool:
                 raise RuntimeError(f"Save verification failed for {verify_path}: contributions did not match after write.")
             if round_money(verify.get("protected_min_contributions", -1)) != round_money(payload["protected_min_contributions"]):
                 raise RuntimeError(f"Save verification failed for {verify_path}: protected floor did not match after write.")
-            if int(verify.get("last_saved_epoch", 0)) != int(payload.get("last_saved_epoch", 0)):
-                raise RuntimeError(f"Save verification failed for {verify_path}: save timestamp did not match after write.")
 
             saved_holdings = portfolio_save_signature(verify.get("portfolio_df", []))
             if saved_holdings != intended_holdings:
                 raise RuntimeError(f"Save verification failed for {verify_path}: holdings did not match after write.")
 
+        github_ok, github_message = write_github_state_payload(payload)
+        st.session_state.github_save_status = github_message
+        if not github_ok:
+            raise RuntimeError(github_message)
+
         st.session_state.protected_min_contributions = payload["protected_min_contributions"]
         st.session_state.last_saved = payload["last_saved"]
-        st.session_state.last_saved_epoch = payload["last_saved_epoch"]
-        st.session_state.embedded_write_ok = bool(embedded_write_ok)
-        if embedded_write_ok:
-            st.session_state.loaded_from = "CURRENT FULL SNAPSHOT - saved successfully to all state, backup, home, root, and embedded files"
-        else:
-            st.session_state.loaded_from = "CURRENT FULL SNAPSHOT - saved to all JSON files; embedded portable copy was not writable"
+        st.session_state.loaded_from = "CURRENT FULL SNAPSHOT - saved successfully to local backups and GitHub cloud state"
         st.session_state.last_save_error = ""
-        st.session_state.session_start_payload = payload
         return True
 
     except Exception as exc:
@@ -899,7 +949,6 @@ def apply_state_dict(state: dict, message: str = "") -> None:
     st.session_state.auto_sync_prices = bool(state.get("auto_sync_prices", True))
     st.session_state.last_price_sync = state.get("last_price_sync", "")
     st.session_state.last_saved = state.get("last_saved", "")
-    st.session_state.last_saved_epoch = saved_epoch_from_state(state)
     st.session_state.last_deploy_message = message or state.get("last_deploy_message", "")
     st.session_state.last_cash_message = state.get("last_cash_message", "")
     sync_editor_from_portfolio()
@@ -917,7 +966,6 @@ def build_session_start_payload_from_loaded_state() -> dict:
         "auto_sync_prices": bool(st.session_state.auto_sync_prices),
         "last_price_sync": str(st.session_state.last_price_sync),
         "last_saved": str(st.session_state.last_saved),
-        "last_saved_epoch": int(st.session_state.get("last_saved_epoch", 0)),
         "last_deploy_message": str(st.session_state.last_deploy_message),
         "last_cash_message": str(st.session_state.last_cash_message),
     }
@@ -940,10 +988,11 @@ def init_state() -> None:
     st.session_state.auto_sync_prices = bool(loaded.get("auto_sync_prices", True))
     st.session_state.last_price_sync = loaded.get("last_price_sync", "")
     st.session_state.last_saved = loaded.get("last_saved", "")
-    st.session_state.last_saved_epoch = saved_epoch_from_state(loaded)
     st.session_state.last_deploy_message = loaded.get("last_deploy_message", "")
     st.session_state.last_cash_message = loaded.get("last_cash_message", "")
     st.session_state.last_save_error = ""
+    st.session_state.github_load_status = loaded.get("_github_load_status", "")
+    st.session_state.github_save_status = ""
     st.session_state.authorize_contribution_reduction_once = False
     st.session_state.editor_version = 0
     st.session_state.app_initialized = True
@@ -954,8 +1003,6 @@ def init_state() -> None:
     st.session_state.needs_force_save_to_spread_snapshot = bool(loaded.get("_needs_force_save_to_spread_snapshot", False))
     st.session_state.auto_repair_performed = bool(loaded.get("_auto_repair_performed", False))
     st.session_state.auto_repair_error = str(loaded.get("_auto_repair_error", ""))
-    st.session_state.embedded_write_ok = loaded.get("_embedded_write_ok", None)
-    st.session_state.stale_valid_siblings_found = bool(loaded.get("_stale_valid_siblings_found", False))
     st.session_state.active_state_file = str(STATE_FILE)
     st.session_state.load_errors = loaded.get("_load_errors", [])
     st.session_state.candidate_summary = loaded.get("_candidate_summary", [])
@@ -1770,8 +1817,9 @@ def render_state_health_box() -> None:
 
     good_loader = (
         "PRIMARY ACTIVE FULL SNAPSHOT" in loaded_from
-        or "BEST PROTECTED FULL SNAPSHOT" in loaded_from
         or "BEST VALID FULL SNAPSHOT" in loaded_from
+        or "BEST PROTECTED FULL SNAPSHOT" in loaded_from
+        or "GITHUB_REPO_STATE" in loaded_from
         or "BACKUP RECOVERY FULL SNAPSHOT" in loaded_from
         or "CURRENT FULL SNAPSHOT" in loaded_from
         or "UPLOADED SNAPSHOT" in loaded_from
@@ -1808,15 +1856,14 @@ def render_state_health_box() -> None:
         f"Hidden save: {state_exists} | Hidden backup: {backup_exists} | Hidden last-good: {last_good_exists} | "
         f"Root save: {legacy_exists} | Root backup: {legacy_backup_exists}"
     )
+    st.caption(f"GitHub cloud persistence: {github_persistence_summary()}")
+    if st.session_state.get("github_load_status"):
+        st.caption(f"GitHub load status: {st.session_state.github_load_status}")
+    if st.session_state.get("github_save_status"):
+        st.caption(f"GitHub save status: {st.session_state.github_save_status}")
 
     if st.session_state.get("auto_repair_performed", False):
         st.success("Automatic recovery ran: the best protected snapshot was promoted to every save and backup location.")
-
-    if st.session_state.get("stale_valid_siblings_found", False):
-        st.info("A stale but valid saved copy was found and overwritten from the newest protected snapshot so it cannot become a rollback later.")
-
-    if "EMBEDDED PORTABLE COPY NOT WRITABLE" in st.session_state.get("loaded_from", "") or st.session_state.get("embedded_write_ok", None) is False:
-        st.warning("The normal JSON saves are protected. The embedded app-file copy may not refresh if the app file is read-only, so do not rely on copying only the .py file as your backup.")
 
     if st.session_state.get("auto_repair_error", ""):
         st.error(f"Automatic recovery could not write everywhere: {st.session_state.auto_repair_error}")
@@ -2241,7 +2288,7 @@ def render_system_tools() -> None:
         "Backup, restore, reload, and safety tools."
     )
 
-    st.warning("Every Save button now writes the main save, backup, last-good, home copies, and root copies automatically, then verifies them. If the app file is writable, it also refreshes the embedded recovery snapshot.")
+    st.warning("Every Save button now writes local backups AND the GitHub cloud state file. Use Download Snapshot Backup only when you want an outside copy before big changes.")
 
     c1, c2, c3 = st.columns(3)
 
@@ -2345,10 +2392,8 @@ def render_system_tools() -> None:
                 apply_state_dict(uploaded_state, "Restored from uploaded snapshot backup.")
                 st.session_state.loaded_from = "UPLOADED SNAPSHOT - restored and made active"
                 payload_to_save = make_payload_from_state(uploaded_state, force_timestamp=True)
-                embedded_write_ok = write_payload_everywhere(payload_to_save)
+                write_payload_everywhere(payload_to_save)
                 st.session_state.last_saved = payload_to_save.get("last_saved", "")
-                st.session_state.last_saved_epoch = payload_to_save.get("last_saved_epoch", 0)
-                st.session_state.embedded_write_ok = bool(embedded_write_ok)
                 st.session_state.protected_min_contributions = payload_to_save.get("protected_min_contributions", uploaded_total)
                 save_state()
                 st.success("Uploaded snapshot restored, saved, backed up in all locations, and made active.")
@@ -2360,6 +2405,9 @@ def render_system_tools() -> None:
     st.markdown("#### Save Diagnostics")
     st.caption(f"App version: {APP_BASELINE_VERSION}")
     st.caption(f"State schema version: {STATE_SCHEMA_VERSION}")
+    st.caption(f"GitHub cloud persistence: {github_persistence_summary()}")
+    st.caption(f"GitHub load status: {st.session_state.get('github_load_status', '')}")
+    st.caption(f"GitHub save status: {st.session_state.get('github_save_status', '')}")
     st.caption(f"Current working directory: {Path.cwd()}")
     st.caption(f"App directory: {APP_DIR}")
     st.caption(f"Hidden active state file: {STATE_FILE}")
@@ -2382,10 +2430,7 @@ def render_system_tools() -> None:
     st.caption(f"Home backup exists: {HOME_BACKUP_FILE.exists()}")
     st.caption(f"Home last-good exists: {HOME_LAST_GOOD_FILE.exists()}")
     st.caption(f"Last saved: {st.session_state.get('last_saved', 'not yet') or 'not yet'}")
-    st.caption(f"Last saved epoch: {st.session_state.get('last_saved_epoch', 0)}")
     st.caption(f"Loaded from: {st.session_state.get('loaded_from', 'UNKNOWN')}")
-    embedded_status = st.session_state.get('embedded_write_ok', None)
-    st.caption(f"Embedded write verified this session: {embedded_status if embedded_status is not None else 'not checked'}")
     st.caption(f"Protected floor: {format_dollars(st.session_state.get('protected_min_contributions', 0.0))}")
 
     if st.session_state.get("last_save_error"):
@@ -2410,7 +2455,7 @@ def main() -> None:
 
     st.markdown('<div class="dashboard-title">Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="dashboard-subtitle">Regular production app &#8226; one-click save + backup &#8226; protected recovery &#8226; stale-save rejection.</div>',
+        '<div class="dashboard-subtitle">Regular production app &#8226; GitHub cloud save &#8226; protected recovery &#8226; stale-save rejection.</div>',
         unsafe_allow_html=True,
     )
 

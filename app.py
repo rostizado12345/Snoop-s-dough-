@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,7 +21,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-28-github-cloud-persistence-v8"
+APP_BASELINE_VERSION = "2026-06-28-verified-backup-github-repair-v9"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -54,13 +55,13 @@ HOME_LAST_GOOD_FILE = HOME_STATE_DIR / "retirement_dashboard_state_last_good.jso
 # Last-resort portable snapshot. This is refreshed on Save when the app file is writable.
 EMBEDDED_SAVED_STATE_JSON = r'''{
   "state_schema_version": 2,
-  "app_baseline_version": "2026-06-15-auto-recovery-v6-extra-50000-protected",
+  "app_baseline_version": "2026-06-28-verified-backup-github-repair-v9",
   "portfolio_df": [
     {
       "ticker": "AIPI",
-      "qty": 692.808,
+      "qty": 706.966,
       "avg_cost": 34.04685,
-      "manual_price": 35.68,
+      "manual_price": 35.865,
       "target_weight": 5.0,
       "annual_yield": 0.124,
       "payout_frequency": "monthly",
@@ -69,9 +70,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "CHPY",
-      "qty": 463.05,
+      "qty": 474.719,
       "avg_cost": 56.06939,
-      "manual_price": 67.7,
+      "manual_price": 81.9401,
       "target_weight": 6.0,
       "annual_yield": 0.05,
       "payout_frequency": "monthly",
@@ -80,9 +81,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "DIVO",
-      "qty": 1317.602,
-      "avg_cost": 44.92944,
-      "manual_price": 45.13,
+      "qty": 1404.379,
+      "avg_cost": 44.979583,
+      "manual_price": 45.705,
       "target_weight": 10.0,
       "annual_yield": 0.048,
       "payout_frequency": "monthly",
@@ -91,9 +92,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "FEPI",
-      "qty": 916.088,
+      "qty": 929.65,
       "avg_cost": 39.99048,
-      "manual_price": 42.93,
+      "manual_price": 41.95,
       "target_weight": 7.0,
       "annual_yield": 0.12,
       "payout_frequency": "monthly",
@@ -102,9 +103,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "GDXY",
-      "qty": 3530.571,
+      "qty": 3619.685,
       "avg_cost": 13.10574,
-      "manual_price": 12.71,
+      "manual_price": 10.2213,
       "target_weight": 15.0,
       "annual_yield": 0.18,
       "payout_frequency": "monthly",
@@ -115,7 +116,7 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
       "ticker": "IAU",
       "qty": 174.866,
       "avg_cost": 84.63566,
-      "manual_price": 85.55,
+      "manual_price": 76.49,
       "target_weight": 4.0,
       "annual_yield": 0.0,
       "payout_frequency": "none",
@@ -124,9 +125,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "IWMI",
-      "qty": 314.353,
+      "qty": 318.115,
       "avg_cost": 48.21481,
-      "manual_price": 50.37,
+      "manual_price": 53.005,
       "target_weight": 4.0,
       "annual_yield": 0.12,
       "payout_frequency": "monthly",
@@ -135,9 +136,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "IYRI",
-      "qty": 381.608,
+      "qty": 385.111,
       "avg_cost": 46.93339,
-      "manual_price": 49.16,
+      "manual_price": 49.67,
       "target_weight": 5.0,
       "annual_yield": 0.08,
       "payout_frequency": "monthly",
@@ -146,9 +147,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "MLPI",
-      "qty": 333.107,
+      "qty": 337.131,
       "avg_cost": 56.78753,
-      "manual_price": 56.38,
+      "manual_price": 55.99,
       "target_weight": 4.0,
       "annual_yield": 0.08,
       "payout_frequency": "quarterly",
@@ -157,9 +158,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "QQQI",
-      "qty": 719.369,
+      "qty": 727.773,
       "avg_cost": 50.46252,
-      "manual_price": 53.86,
+      "manual_price": 55.05,
       "target_weight": 10.0,
       "annual_yield": 0.14,
       "payout_frequency": "monthly",
@@ -168,9 +169,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "SPYI",
-      "qty": 1262.507,
-      "avg_cost": 49.48005,
-      "manual_price": 52.14,
+      "qty": 1370.585,
+      "avg_cost": 49.669172,
+      "manual_price": 52.19,
       "target_weight": 12.0,
       "annual_yield": 0.12,
       "payout_frequency": "monthly",
@@ -179,9 +180,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "SVOL",
-      "qty": 1596.886,
-      "avg_cost": 15.49701,
-      "manual_price": 15.91,
+      "qty": 1721.341,
+      "avg_cost": 15.515646,
+      "manual_price": 15.7,
       "target_weight": 6.0,
       "annual_yield": 0.16,
       "payout_frequency": "monthly",
@@ -190,9 +191,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "TLTW",
-      "qty": 976.835,
-      "avg_cost": 22.28491,
-      "manual_price": 22.3,
+      "qty": 1031.331,
+      "avg_cost": 22.295132,
+      "manual_price": 22.515,
       "target_weight": 7.0,
       "annual_yield": 0.12,
       "payout_frequency": "monthly",
@@ -200,20 +201,22 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
       "notes": ""
     }
   ],
-  "cash_fdrxx": 143912.21,
+  "cash_fdrxx": 132923.13,
   "total_contributions": 486299.07,
   "protected_min_contributions": 486299.07,
   "use_live_prices": true,
   "auto_sync_prices": true,
-  "last_price_sync": "",
-  "last_saved": "2026-06-15 11:59:59 AM",
-  "last_deploy_message": "Auto-recovery baseline includes the extra $50,000 in FDRXX.",
-  "last_cash_message": "FDRXX cash baseline: $143,912.21 after extra $50,000 add."
+  "last_price_sync": "2026-06-26 07:46:00 PM",
+  "last_saved": "2026-06-26 07:59:42.448677 PM",
+  "last_saved_epoch": 1782503982448705733,
+  "last_deploy_message": "Verified 2026-06-26 backup embedded as protected app baseline.",
+  "last_cash_message": "FDRXX cash set exactly to $132,923.13 from verified backup snapshot."
 }'''
 
-DEFAULT_CASH_FDRXX = 143912.21
+DEFAULT_CASH_FDRXX = 132923.13
 DEFAULT_TOTAL_CONTRIBUTIONS = 486299.07
 CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS = 486299.07
+VERIFIED_BACKUP_LAST_SAVED_EPOCH = 1782503982448705733
 
 DEFAULT_COLUMNS = [
     "ticker", "qty", "avg_cost", "manual_price", "target_weight",
@@ -221,19 +224,19 @@ DEFAULT_COLUMNS = [
 ]
 
 DEFAULT_ROWS = [
-    ["AIPI", 692.808, 34.04685, 35.68, 5.0, 0.124, "monthly", "all", ""],
-    ["CHPY", 463.050, 56.06939, 67.70, 6.0, 0.050, "monthly", "all", ""],
-    ["DIVO", 1317.602, 44.92944, 45.13, 10.0, 0.048, "monthly", "all", ""],
-    ["FEPI", 916.088, 39.99048, 42.93, 7.0, 0.120, "monthly", "all", ""],
-    ["GDXY", 3530.571, 13.10574, 12.71, 15.0, 0.180, "monthly", "all", ""],
-    ["IAU", 174.866, 84.63566, 85.55, 4.0, 0.000, "none", "none", ""],
-    ["IWMI", 314.353, 48.21481, 50.37, 4.0, 0.120, "monthly", "all", ""],
-    ["IYRI", 381.608, 46.93339, 49.16, 5.0, 0.080, "monthly", "all", ""],
-    ["MLPI", 333.107, 56.78753, 56.38, 4.0, 0.080, "quarterly", "3,6,9,12", ""],
-    ["QQQI", 719.369, 50.46252, 53.86, 10.0, 0.140, "monthly", "all", ""],
-    ["SPYI", 1262.507, 49.48005, 52.14, 12.0, 0.120, "monthly", "all", ""],
-    ["SVOL", 1596.886, 15.49701, 15.91, 6.0, 0.160, "monthly", "all", ""],
-    ["TLTW", 976.835, 22.28491, 22.30, 7.0, 0.120, "monthly", "all", ""],
+    ["AIPI", 706.966000, 34.046850, 35.8650, 5.0, 0.124, "monthly", "all", ""],
+    ["CHPY", 474.719000, 56.069390, 81.9401, 6.0, 0.050, "monthly", "all", ""],
+    ["DIVO", 1404.379000, 44.979583, 45.7050, 10.0, 0.048, "monthly", "all", ""],
+    ["FEPI", 929.650000, 39.990480, 41.9500, 7.0, 0.120, "monthly", "all", ""],
+    ["GDXY", 3619.685000, 13.105740, 10.2213, 15.0, 0.180, "monthly", "all", ""],
+    ["IAU", 174.866000, 84.635660, 76.4900, 4.0, 0.000, "none", "none", ""],
+    ["IWMI", 318.115000, 48.214810, 53.0050, 4.0, 0.120, "monthly", "all", ""],
+    ["IYRI", 385.111000, 46.933390, 49.6700, 5.0, 0.080, "monthly", "all", ""],
+    ["MLPI", 337.131000, 56.787530, 55.9900, 4.0, 0.080, "quarterly", "3,6,9,12", ""],
+    ["QQQI", 727.773000, 50.462520, 55.0500, 10.0, 0.140, "monthly", "all", ""],
+    ["SPYI", 1370.585000, 49.669172, 52.1900, 12.0, 0.120, "monthly", "all", ""],
+    ["SVOL", 1721.341000, 15.515646, 15.7000, 6.0, 0.160, "monthly", "all", ""],
+    ["TLTW", 1031.331000, 22.295132, 22.5150, 7.0, 0.120, "monthly", "all", ""],
 ]
 
 SMART_INCOME_TIERS = {
@@ -260,6 +263,21 @@ def to_float(value, default: float = 0.0) -> float:
         return default
 
 
+
+
+def to_int(value, default: int = 0) -> int:
+    try:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            cleaned = value.replace(",", "").strip()
+            return default if cleaned == "" else int(float(cleaned))
+        if pd.isna(value):
+            return default
+        return int(value)
+    except Exception:
+        return default
+
 def round_money(value: float) -> float:
     return round(float(value), 2)
 
@@ -277,7 +295,7 @@ def format_percent(value: float) -> str:
 
 
 def parse_saved_time(value: str) -> datetime:
-    for fmt in ["%Y-%m-%d %I:%M:%S %p", "%Y-%m-%d %H:%M:%S"]:
+    for fmt in ["%Y-%m-%d %I:%M:%S.%f %p", "%Y-%m-%d %I:%M:%S %p", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"]:
         try:
             return datetime.strptime(str(value), fmt)
         except Exception:
@@ -324,6 +342,7 @@ def baseline_state_payload() -> dict:
         "auto_sync_prices": True,
         "last_price_sync": "",
         "last_saved": now,
+        "last_saved_epoch": time.time_ns(),
         "last_deploy_message": "Loaded current protected full-snapshot production baseline.",
         "last_cash_message": f"FDRXX cash baseline: {format_dollars(DEFAULT_CASH_FDRXX)}.",
     }
@@ -354,6 +373,7 @@ def normalize_state_payload(raw: dict) -> dict:
         "auto_sync_prices": bool(raw.get("auto_sync_prices", True)),
         "last_price_sync": str(raw.get("last_price_sync", "")),
         "last_saved": str(raw.get("last_saved", "")),
+        "last_saved_epoch": to_int(raw.get("last_saved_epoch", 0), 0),
         "last_deploy_message": str(raw.get("last_deploy_message", "")),
         "last_cash_message": str(raw.get("last_cash_message", "")),
     }
@@ -531,7 +551,22 @@ def write_github_state_payload(payload: dict) -> tuple[bool, str]:
             body["sha"] = sha
 
         github_api_json(cfg, "PUT", github_contents_url(cfg, include_ref=False), body=body)
-        return True, f"GitHub cloud save verified: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+
+        verify_raw, verify_message = read_github_state_payload()
+        if not verify_raw:
+            return False, f"GitHub cloud save failed verification: {verify_message}"
+
+        verify_payload = normalize_state_payload(verify_raw)
+        if round_money(verify_payload.get("cash_fdrxx", -1)) != round_money(clean_payload["cash_fdrxx"]):
+            return False, "GitHub cloud save failed verification: cash did not match after GitHub write."
+        if round_money(verify_payload.get("total_contributions", -1)) != round_money(clean_payload["total_contributions"]):
+            return False, "GitHub cloud save failed verification: total contributions did not match after GitHub write."
+        if round_money(verify_payload.get("protected_min_contributions", -1)) != round_money(clean_payload["protected_min_contributions"]):
+            return False, "GitHub cloud save failed verification: protected floor did not match after GitHub write."
+        if portfolio_save_signature(verify_payload.get("portfolio_df", [])) != portfolio_save_signature(clean_payload["portfolio_df"]):
+            return False, "GitHub cloud save failed verification: holdings did not match after GitHub write."
+
+        return True, f"GitHub cloud save verified by read-back: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
     except Exception as exc:
         return False, f"GitHub cloud save failed: {exc}"
 
@@ -557,8 +592,11 @@ def make_payload_from_state(state: dict, force_timestamp: bool = False) -> dict:
     else:
         df = normalize_portfolio_df(pd.DataFrame(source_df))
     saved_time = str(state.get("last_saved", ""))
+    saved_epoch = to_int(state.get("last_saved_epoch", 0), 0)
     if force_timestamp or saved_time.strip() == "":
         saved_time = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
+    if force_timestamp or saved_epoch <= 0:
+        saved_epoch = time.time_ns()
 
     total_contributions = round_money(state["total_contributions"])
     protected_min = round_money(
@@ -579,6 +617,7 @@ def make_payload_from_state(state: dict, force_timestamp: bool = False) -> dict:
         "auto_sync_prices": bool(state.get("auto_sync_prices", True)),
         "last_price_sync": str(state.get("last_price_sync", "")),
         "last_saved": saved_time,
+        "last_saved_epoch": saved_epoch,
         "last_deploy_message": str(state.get("last_deploy_message", "")),
         "last_cash_message": str(state.get("last_cash_message", "")),
     }
@@ -597,13 +636,29 @@ def candidate_protected_value(item: dict) -> float:
     return round_money(max(total, protected_min))
 
 
+
+def candidate_last_saved_epoch(item: dict) -> int:
+    return to_int(item.get("state", {}).get("last_saved_epoch", 0), 0)
+
+
+def candidate_verified_source_rank(item: dict) -> int:
+    path_name = str(item.get("path", ""))
+    epoch = candidate_last_saved_epoch(item)
+    if epoch and epoch >= VERIFIED_BACKUP_LAST_SAVED_EPOCH:
+        return 2
+    if path_name == "EMBEDDED_APP_FILE_SNAPSHOT":
+        return 1
+    return 0
+
 def candidate_sort_key(item: dict) -> tuple:
     state = item["state"]
     return (
         1 if state.get("state_schema_version", 1) >= STATE_SCHEMA_VERSION else 0,
         candidate_protected_value(item),
         round_money(state.get("total_contributions", 0.0)),
+        candidate_last_saved_epoch(item),
         item["last_saved_dt"],
+        candidate_verified_source_rank(item),
     )
 
 
@@ -767,8 +822,13 @@ def load_state() -> dict:
             try:
                 promoted_payload = make_payload_from_state(loaded, force_timestamp=True)
                 write_payload_everywhere(promoted_payload)
+                if get_github_persistence_config().get("configured"):
+                    github_ok, github_promote_message = write_github_state_payload(promoted_payload)
+                    github_status = f"{github_status} | {github_promote_message}"
+                    if not github_ok:
+                        errors.append(github_promote_message)
                 loaded = normalize_state_payload(promoted_payload)
-                loaded_from = f"{loaded_from} | AUTO-REPAIRED AND PROMOTED TO ALL SAVE LOCATIONS"
+                loaded_from = f"{loaded_from} | AUTO-REPAIRED AND PROMOTED TO LOCAL BACKUPS, EMBEDDED SNAPSHOT, AND GITHUB WHEN CONFIGURED"
                 auto_repair_performed = True
             except Exception as exc:
                 auto_repair_error = str(exc)
@@ -799,6 +859,11 @@ def load_state() -> dict:
 
     # First-run only: no saved state exists, so create the initial protected baseline.
     write_payload_everywhere(payload)
+    if get_github_persistence_config().get("configured"):
+        github_ok, github_seed_message = write_github_state_payload(payload)
+        github_status = f"{github_status} | {github_seed_message}"
+        if not github_ok:
+            errors.append(github_seed_message)
 
     state["_loaded_from"] = "CURRENT PROTECTED FULL-SNAPSHOT BASELINE - no valid saved file found"
     state["_version_mismatch_fixed"] = False
@@ -833,6 +898,7 @@ def make_state_payload() -> dict:
         "auto_sync_prices": bool(st.session_state.auto_sync_prices),
         "last_price_sync": str(st.session_state.last_price_sync),
         "last_saved": datetime.now().strftime("%Y-%m-%d %I:%M:%S %p"),
+        "last_saved_epoch": time.time_ns(),
         "last_deploy_message": str(st.session_state.get("last_deploy_message", "")),
         "last_cash_message": str(st.session_state.get("last_cash_message", "")),
     }
@@ -919,6 +985,7 @@ def save_state() -> bool:
 
         st.session_state.protected_min_contributions = payload["protected_min_contributions"]
         st.session_state.last_saved = payload["last_saved"]
+        st.session_state.last_saved_epoch = payload.get("last_saved_epoch", 0)
         st.session_state.loaded_from = "CURRENT FULL SNAPSHOT - saved successfully to local backups and GitHub cloud state"
         st.session_state.last_save_error = ""
         return True
@@ -949,6 +1016,7 @@ def apply_state_dict(state: dict, message: str = "") -> None:
     st.session_state.auto_sync_prices = bool(state.get("auto_sync_prices", True))
     st.session_state.last_price_sync = state.get("last_price_sync", "")
     st.session_state.last_saved = state.get("last_saved", "")
+    st.session_state.last_saved_epoch = to_int(state.get("last_saved_epoch", 0), 0)
     st.session_state.last_deploy_message = message or state.get("last_deploy_message", "")
     st.session_state.last_cash_message = state.get("last_cash_message", "")
     sync_editor_from_portfolio()
@@ -966,6 +1034,7 @@ def build_session_start_payload_from_loaded_state() -> dict:
         "auto_sync_prices": bool(st.session_state.auto_sync_prices),
         "last_price_sync": str(st.session_state.last_price_sync),
         "last_saved": str(st.session_state.last_saved),
+        "last_saved_epoch": to_int(st.session_state.get("last_saved_epoch", 0), 0),
         "last_deploy_message": str(st.session_state.last_deploy_message),
         "last_cash_message": str(st.session_state.last_cash_message),
     }
@@ -988,6 +1057,7 @@ def init_state() -> None:
     st.session_state.auto_sync_prices = bool(loaded.get("auto_sync_prices", True))
     st.session_state.last_price_sync = loaded.get("last_price_sync", "")
     st.session_state.last_saved = loaded.get("last_saved", "")
+    st.session_state.last_saved_epoch = to_int(loaded.get("last_saved_epoch", 0), 0)
     st.session_state.last_deploy_message = loaded.get("last_deploy_message", "")
     st.session_state.last_cash_message = loaded.get("last_cash_message", "")
     st.session_state.last_save_error = ""
@@ -2395,8 +2465,10 @@ def render_system_tools() -> None:
                 write_payload_everywhere(payload_to_save)
                 st.session_state.last_saved = payload_to_save.get("last_saved", "")
                 st.session_state.protected_min_contributions = payload_to_save.get("protected_min_contributions", uploaded_total)
-                save_state()
-                st.success("Uploaded snapshot restored, saved, backed up in all locations, and made active.")
+                if save_state():
+                    st.success("Uploaded snapshot restored, saved, backed up in all locations, verified locally, and verified in GitHub cloud state.")
+                else:
+                    st.error(f"Snapshot restored locally, but cloud save verification failed: {st.session_state.last_save_error}")
                 st.rerun()
 
         except Exception as exc:

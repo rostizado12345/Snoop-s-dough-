@@ -1256,38 +1256,22 @@ def refresh_saved_manual_prices(calc_df: pd.DataFrame, persist: bool = False) ->
     return changed
 
 
-def add_new_money(amount: float) -> bool:
+def add_new_money(amount: float) -> None:
     amount = round_money(amount)
     if amount <= 0:
-        st.session_state.last_cash_message = "Enter a deposit greater than $0.00."
-        return False
+        return
 
-    old_cash = round_money(st.session_state.cash_fdrxx)
-    old_total = round_money(st.session_state.total_contributions)
-    old_floor = round_money(st.session_state.protected_min_contributions)
-    old_message = str(st.session_state.get("last_cash_message", ""))
-
-    st.session_state.cash_fdrxx = round_money(old_cash + amount)
-    st.session_state.total_contributions = round_money(old_total + amount)
+    st.session_state.cash_fdrxx = round_money(st.session_state.cash_fdrxx + amount)
+    st.session_state.total_contributions = round_money(st.session_state.total_contributions + amount)
     st.session_state.protected_min_contributions = round_money(
-        max(old_floor, st.session_state.total_contributions)
+        max(st.session_state.protected_min_contributions, st.session_state.total_contributions)
     )
     st.session_state.last_cash_message = f"Added new money: {format_dollars(amount)} to FDRXX."
-
-    if save_state():
-        return True
-
-    # Never leave the screen showing an unsaved deposit after a failed write.
-    st.session_state.cash_fdrxx = old_cash
-    st.session_state.total_contributions = old_total
-    st.session_state.protected_min_contributions = old_floor
-    st.session_state.last_cash_message = old_message
-    return False
+    save_state()
 
 
-def set_exact_cash(new_cash: float) -> bool:
+def set_exact_cash(new_cash: float) -> None:
     old_cash = round_money(st.session_state.cash_fdrxx)
-    old_message = str(st.session_state.get("last_cash_message", ""))
     new_cash = round_money(new_cash)
     difference = round_money(new_cash - old_cash)
 
@@ -1296,13 +1280,7 @@ def set_exact_cash(new_cash: float) -> bool:
         f"FDRXX cash set exactly to {format_dollars(new_cash)}. "
         f"Adjustment: {format_dollars(difference)}."
     )
-
-    if save_state():
-        return True
-
-    st.session_state.cash_fdrxx = old_cash
-    st.session_state.last_cash_message = old_message
-    return False
+    save_state()
 
 
 def deploy_cash_to_position(ticker: str, dollars: float, calc_df: pd.DataFrame) -> None:
@@ -2150,11 +2128,9 @@ def render_top_controls(calc: dict) -> None:
         set_cash_pressed = st.form_submit_button("Set Exact FDRXX Cash", use_container_width=True)
 
     if set_cash_pressed:
-        if set_exact_cash(float(exact_cash)):
-            st.success("Exact FDRXX cash saved.")
-            st.rerun()
-        else:
-            st.error(f"Exact cash was not saved: {st.session_state.last_save_error}")
+        set_exact_cash(float(exact_cash))
+        st.success("Exact FDRXX cash saved.")
+        st.rerun()
 
     if st.session_state.get("last_cash_message"):
         st.info(st.session_state.last_cash_message)
@@ -2200,22 +2176,16 @@ def render_top_controls(calc: dict) -> None:
     quick_amounts = [1000, 5000, 10000, 16000, 32000]
     for i, amt in enumerate(quick_amounts):
         if cols[i].button(f"+ ${amt:,.0f}", use_container_width=True):
-            if add_new_money(float(amt)):
-                st.rerun()
-            else:
-                st.error(f"Deposit was not saved: {st.session_state.last_save_error}")
+            add_new_money(float(amt))
+            st.rerun()
 
     with st.form("custom_cash_form"):
         custom_cash = st.number_input("Custom cash deposit to FDRXX", min_value=0.0, step=500.0, value=0.0, format="%.2f")
         add_custom = st.form_submit_button("Add Custom Deposit", use_container_width=True)
 
-    if add_custom:
-        if custom_cash <= 0:
-            st.warning("Enter a deposit greater than $0.00.")
-        elif add_new_money(float(custom_cash)):
-            st.rerun()
-        else:
-            st.error(f"Deposit was not saved: {st.session_state.last_save_error}")
+    if add_custom and custom_cash > 0:
+        add_new_money(float(custom_cash))
+        st.rerun()
 
 
 def render_deploy_cash(calc: dict) -> None:
@@ -2626,4 +2596,26 @@ def main() -> None:
     render_metrics(calc)
 
     with st.expander("Open to Edit / Update Holdings, Cash, Backups, and Details", expanded=False):
-        st.caption("Viewing m
+        st.caption("Viewing mode stays protected while this is closed. Open only when you want to edit holdings, deploy cash, update cash/contributions, view detailed tables, or use backup/restore tools.")
+
+        render_top_controls(calc)
+        st.divider()
+
+        render_deploy_cash(calc)
+        st.divider()
+
+        render_holdings_editor()
+        st.divider()
+
+        render_breakdowns(calc)
+        st.divider()
+
+        render_income_helper(calc)
+        st.divider()
+
+        render_system_tools()
+
+
+
+if __name__ == "__main__":
+    main()

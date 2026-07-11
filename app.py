@@ -16,7 +16,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-07-10-full-ui-safe-save-v17"
+APP_BASELINE_VERSION = "2026-07-10-stable-simple-save-v18"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -381,17 +381,13 @@ def write_embedded_state_payload(payload: dict) -> None:
 
 
 def candidate_state_files() -> List[Path]:
-    return [
-        STATE_FILE,
-        LAST_GOOD_FILE,
-        BACKUP_FILE,
-        HOME_STATE_FILE,
-        HOME_LAST_GOOD_FILE,
-        HOME_BACKUP_FILE,
-        LEGACY_STATE_FILE,
-        LEGACY_LAST_GOOD_FILE,
-        LEGACY_BACKUP_FILE,
-    ]
+    """Use the original small local save set only.
+
+    Streamlit reruns must not scan or reconcile many copies from different
+    folders. The active file is authoritative; backup and last-good are only
+    local recovery choices if the active file is missing or damaged.
+    """
+    return [STATE_FILE, BACKUP_FILE, LAST_GOOD_FILE]
 
 
 def make_payload_from_state(state: dict, force_timestamp: bool = False) -> dict:
@@ -463,20 +459,19 @@ def is_candidate_valid(item: dict) -> bool:
 
 
 def writable_state_files() -> List[Path]:
-    """Files that must save and verify successfully."""
-    return [HOME_STATE_FILE, HOME_BACKUP_FILE, HOME_LAST_GOOD_FILE]
+    """Only the active state file is required and verified."""
+    return [STATE_FILE]
 
 
 def write_payload_everywhere(payload: dict) -> None:
-    # Save the three protected home-folder copies first. These are the required
-    # copies and are independent of the app filename or a read-only repo folder.
-    for path in writable_state_files():
-        write_json_atomic(path, payload)
+    """Write one authoritative save and two non-blocking recovery copies.
 
-    # Compatibility copies are best-effort only. A read-only Streamlit/GitHub
-    # checkout must never turn an otherwise successful save into an error.
-    for path in [STATE_FILE, BACKUP_FILE, LAST_GOOD_FILE,
-                 LEGACY_STATE_FILE, LEGACY_BACKUP_FILE, LEGACY_LAST_GOOD_FILE]:
+    The active file must succeed. A backup failure must never blank the app or
+    turn a valid Save click into an error.
+    """
+    write_json_atomic(STATE_FILE, payload)
+
+    for path in [BACKUP_FILE, LAST_GOOD_FILE]:
         try:
             write_json_atomic(path, payload)
         except Exception:
@@ -736,7 +731,7 @@ def save_state() -> bool:
 
         st.session_state.protected_min_contributions = payload["protected_min_contributions"]
         st.session_state.last_saved = payload["last_saved"]
-        st.session_state.loaded_from = f"CURRENT FULL SNAPSHOT - saved and verified in protected state files"
+        st.session_state.loaded_from = f"CURRENT FULL SNAPSHOT - saved and verified in active state file"
         st.session_state.last_save_error = ""
         return True
 
@@ -2096,7 +2091,7 @@ def render_system_tools() -> None:
         "Backup, restore, reload, and safety tools."
     )
 
-    st.warning("Every Save button now writes the main save, backup, last-good, home copies, root copies, and embedded recovery snapshot automatically. Use Download Snapshot Backup only when you want an outside copy before big changes.")
+    st.warning("Every Save button writes one active save plus two best-effort local recovery copies. Use Download Snapshot Backup only when you want an outside copy before big changes.")
 
     c1, c2, c3 = st.columns(3)
 
@@ -2260,7 +2255,7 @@ def main() -> None:
 
     st.markdown('<div class="dashboard-title">Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="dashboard-subtitle">Regular production app &#8226; one-click save + backup &#8226; protected recovery &#8226; stale-save rejection.</div>',
+        '<div class="dashboard-subtitle">Regular production app &#8226; simple active save &#8226; local backup recovery &#8226; stale-save rejection.</div>',
         unsafe_allow_html=True,
     )
 
@@ -2332,13 +2327,4 @@ def main() -> None:
         st.divider()
 
         render_breakdowns(calc)
-        st.divider()
-
-        render_income_helper(calc)
-        st.divider()
-
-        render_system_tools()
-
-
-if __name__ == "__main__":
-    main()
+        st

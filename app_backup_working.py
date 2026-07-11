@@ -21,7 +21,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-07-10-stable-save-repair-v12"
+APP_BASELINE_VERSION = "2026-07-10-stable-save-repair-v13"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -55,7 +55,7 @@ HOME_LAST_GOOD_FILE = HOME_STATE_DIR / "retirement_dashboard_state_last_good.jso
 # Last-resort portable snapshot. This is refreshed on Save when the app file is writable.
 EMBEDDED_SAVED_STATE_JSON = r'''{
   "state_schema_version": 2,
-  "app_baseline_version": "2026-07-10-stable-save-repair-v12",
+  "app_baseline_version": "2026-07-10-stable-save-repair-v13",
   "portfolio_df": [
     {
       "ticker": "AIPI",
@@ -657,24 +657,41 @@ def is_candidate_valid(item: dict) -> bool:
     return total >= CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS
 
 
-def write_payload_everywhere(payload: dict) -> None:
-    """Write the snapshot to every writable location without crashing on read-only paths."""
+def write_payload_everywhere(payload: dict) -> List[Path]:
+    """Write the snapshot wherever possible and return only verified-write candidates.
+
+    Streamlit Cloud and GitHub checkouts can contain paths that exist but are read-only.
+    A failed optional copy must not make a successful save look like a dashboard crash.
+    """
     targets = [
         STATE_FILE, BACKUP_FILE, LAST_GOOD_FILE,
         HOME_STATE_FILE, HOME_BACKUP_FILE, HOME_LAST_GOOD_FILE,
         LEGACY_STATE_FILE, LEGACY_BACKUP_FILE, LEGACY_LAST_GOOD_FILE,
     ]
-    successes = []
+    successes: List[Path] = []
     failures = []
+    seen = set()
+
     for path in targets:
+        # Some legacy and current paths can resolve to the same file. Write each once.
+        try:
+            identity = str(path.resolve())
+        except Exception:
+            identity = str(path)
+        if identity in seen:
+            continue
+        seen.add(identity)
+
         try:
             write_json_atomic(path, payload)
-            successes.append(str(path))
+            successes.append(path)
         except Exception as exc:
             failures.append(f"{path}: {exc}")
 
     if not successes:
         raise RuntimeError("Could not save the dashboard state to any writable location. " + " | ".join(failures))
+
+    return successes
 
 
 def load_state() -> dict:
@@ -945,11 +962,12 @@ def save_state() -> bool:
         else:
             payload["protected_min_contributions"] = round_money(max(existing_floor, current_total))
 
-        write_payload_everywhere(payload)
+        written_paths = write_payload_everywhere(payload)
 
         intended_holdings = portfolio_save_signature(payload["portfolio_df"])
 
-        for verify_path in candidate_state_files():
+        # Verify only copies that were actually written successfully in this save.
+        for verify_path in written_paths:
             verify = normalize_state_payload(read_json_file(verify_path))
             if round_money(verify.get("cash_fdrxx", -1)) != round_money(payload["cash_fdrxx"]):
                 raise RuntimeError(f"Save verification failed for {verify_path}: cash did not match after write.")
@@ -2597,6 +2615,3 @@ def main() -> None:
 
         render_system_tools()
 
-
-if __name__ == "__main__":
-    main()

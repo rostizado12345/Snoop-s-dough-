@@ -1,6 +1,10 @@
+import base64
 import json
 import os
 import re
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
@@ -16,7 +20,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-07-10-stable-simple-save-v18"
+APP_BASELINE_VERSION = "2026-06-28-github-cloud-persistence-v8"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -36,6 +40,10 @@ LEGACY_STATE_FILE = APP_DIR / "retirement_dashboard_state.json"
 LEGACY_BACKUP_FILE = APP_DIR / "retirement_dashboard_state_backup.json"
 LEGACY_LAST_GOOD_FILE = APP_DIR / "retirement_dashboard_state_last_good.json"
 
+# Cloud save file inside GitHub. This is the durable Streamlit Cloud copy.
+# Secrets expected in Streamlit: GITHUB_TOKEN, GITHUB_REPO, GITHUB_BRANCH.
+GITHUB_STATE_DEFAULT_PATH = "retirement_dashboard_state.json"
+
 # Home-folder copies survive app filename changes, Downloads-folder copies, and most local reruns.
 HOME_STATE_DIR = Path.home() / ".retirement_dashboard_state"
 HOME_STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -46,13 +54,13 @@ HOME_LAST_GOOD_FILE = HOME_STATE_DIR / "retirement_dashboard_state_last_good.jso
 # Last-resort portable snapshot. This is refreshed on Save when the app file is writable.
 EMBEDDED_SAVED_STATE_JSON = r'''{
   "state_schema_version": 2,
-  "app_baseline_version": "2026-07-10-full-ui-safe-save-v17",
+  "app_baseline_version": "2026-06-15-auto-recovery-v6-extra-50000-protected",
   "portfolio_df": [
     {
       "ticker": "AIPI",
-      "qty": 706.966,
+      "qty": 692.808,
       "avg_cost": 34.04685,
-      "manual_price": 35.865,
+      "manual_price": 35.68,
       "target_weight": 5.0,
       "annual_yield": 0.124,
       "payout_frequency": "monthly",
@@ -61,9 +69,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "CHPY",
-      "qty": 474.719,
+      "qty": 463.05,
       "avg_cost": 56.06939,
-      "manual_price": 81.9401,
+      "manual_price": 67.7,
       "target_weight": 6.0,
       "annual_yield": 0.05,
       "payout_frequency": "monthly",
@@ -72,9 +80,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "DIVO",
-      "qty": 1404.379,
-      "avg_cost": 44.979583,
-      "manual_price": 45.705,
+      "qty": 1317.602,
+      "avg_cost": 44.92944,
+      "manual_price": 45.13,
       "target_weight": 10.0,
       "annual_yield": 0.048,
       "payout_frequency": "monthly",
@@ -83,9 +91,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "FEPI",
-      "qty": 929.65,
+      "qty": 916.088,
       "avg_cost": 39.99048,
-      "manual_price": 41.95,
+      "manual_price": 42.93,
       "target_weight": 7.0,
       "annual_yield": 0.12,
       "payout_frequency": "monthly",
@@ -94,9 +102,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "GDXY",
-      "qty": 3619.685,
+      "qty": 3530.571,
       "avg_cost": 13.10574,
-      "manual_price": 10.2213,
+      "manual_price": 12.71,
       "target_weight": 15.0,
       "annual_yield": 0.18,
       "payout_frequency": "monthly",
@@ -107,7 +115,7 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
       "ticker": "IAU",
       "qty": 174.866,
       "avg_cost": 84.63566,
-      "manual_price": 76.49,
+      "manual_price": 85.55,
       "target_weight": 4.0,
       "annual_yield": 0.0,
       "payout_frequency": "none",
@@ -116,9 +124,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "IWMI",
-      "qty": 318.115,
+      "qty": 314.353,
       "avg_cost": 48.21481,
-      "manual_price": 53.005,
+      "manual_price": 50.37,
       "target_weight": 4.0,
       "annual_yield": 0.12,
       "payout_frequency": "monthly",
@@ -127,9 +135,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "IYRI",
-      "qty": 385.111,
+      "qty": 381.608,
       "avg_cost": 46.93339,
-      "manual_price": 49.67,
+      "manual_price": 49.16,
       "target_weight": 5.0,
       "annual_yield": 0.08,
       "payout_frequency": "monthly",
@@ -138,9 +146,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "MLPI",
-      "qty": 337.131,
+      "qty": 333.107,
       "avg_cost": 56.78753,
-      "manual_price": 55.99,
+      "manual_price": 56.38,
       "target_weight": 4.0,
       "annual_yield": 0.08,
       "payout_frequency": "quarterly",
@@ -149,9 +157,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "QQQI",
-      "qty": 727.773,
+      "qty": 719.369,
       "avg_cost": 50.46252,
-      "manual_price": 55.05,
+      "manual_price": 53.86,
       "target_weight": 10.0,
       "annual_yield": 0.14,
       "payout_frequency": "monthly",
@@ -160,9 +168,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "SPYI",
-      "qty": 1370.585,
-      "avg_cost": 49.669172,
-      "manual_price": 52.19,
+      "qty": 1262.507,
+      "avg_cost": 49.48005,
+      "manual_price": 52.14,
       "target_weight": 12.0,
       "annual_yield": 0.12,
       "payout_frequency": "monthly",
@@ -171,9 +179,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "SVOL",
-      "qty": 1721.341,
-      "avg_cost": 15.515646,
-      "manual_price": 15.7,
+      "qty": 1596.886,
+      "avg_cost": 15.49701,
+      "manual_price": 15.91,
       "target_weight": 6.0,
       "annual_yield": 0.16,
       "payout_frequency": "monthly",
@@ -182,9 +190,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "TLTW",
-      "qty": 1031.331,
-      "avg_cost": 22.295132,
-      "manual_price": 22.515,
+      "qty": 976.835,
+      "avg_cost": 22.28491,
+      "manual_price": 22.3,
       "target_weight": 7.0,
       "annual_yield": 0.12,
       "payout_frequency": "monthly",
@@ -192,20 +200,20 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
       "notes": ""
     }
   ],
-  "cash_fdrxx": 207923.13,
-  "total_contributions": 561299.07,
-  "protected_min_contributions": 561299.07,
+  "cash_fdrxx": 143912.21,
+  "total_contributions": 486299.07,
+  "protected_min_contributions": 486299.07,
   "use_live_prices": true,
   "auto_sync_prices": true,
-  "last_price_sync": "2026-06-26 07:46:00 PM",
-  "last_saved": "2026-07-10 10:30:00 PM",
-  "last_deploy_message": "Updated full-feature baseline with verified July 10 holdings and cash.",
-  "last_cash_message": "FDRXX cash baseline: $207,923.13. The $3,112.29 test amount is intentionally excluded."
+  "last_price_sync": "",
+  "last_saved": "2026-06-15 11:59:59 AM",
+  "last_deploy_message": "Auto-recovery baseline includes the extra $50,000 in FDRXX.",
+  "last_cash_message": "FDRXX cash baseline: $143,912.21 after extra $50,000 add."
 }'''
 
-DEFAULT_CASH_FDRXX = 207923.13
-DEFAULT_TOTAL_CONTRIBUTIONS = 561299.07
-CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS = 561299.07
+DEFAULT_CASH_FDRXX = 143912.21
+DEFAULT_TOTAL_CONTRIBUTIONS = 486299.07
+CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS = 486299.07
 
 DEFAULT_COLUMNS = [
     "ticker", "qty", "avg_cost", "manual_price", "target_weight",
@@ -213,19 +221,19 @@ DEFAULT_COLUMNS = [
 ]
 
 DEFAULT_ROWS = [
-    ['AIPI', 706.966, 34.04685, 35.865, 5.0, 0.124, 'monthly', 'all', ''],
-    ['CHPY', 474.719, 56.06939, 81.9401, 6.0, 0.05, 'monthly', 'all', ''],
-    ['DIVO', 1404.379, 44.979583, 45.705, 10.0, 0.048, 'monthly', 'all', ''],
-    ['FEPI', 929.65, 39.99048, 41.95, 7.0, 0.12, 'monthly', 'all', ''],
-    ['GDXY', 3619.685, 13.10574, 10.2213, 15.0, 0.18, 'monthly', 'all', ''],
-    ['IAU', 174.866, 84.63566, 76.49, 4.0, 0.0, 'none', 'none', ''],
-    ['IWMI', 318.115, 48.21481, 53.005, 4.0, 0.12, 'monthly', 'all', ''],
-    ['IYRI', 385.111, 46.93339, 49.67, 5.0, 0.08, 'monthly', 'all', ''],
-    ['MLPI', 337.131, 56.78753, 55.99, 4.0, 0.08, 'quarterly', '3,6,9,12', ''],
-    ['QQQI', 727.773, 50.46252, 55.05, 10.0, 0.14, 'monthly', 'all', ''],
-    ['SPYI', 1370.585, 49.669172, 52.19, 12.0, 0.12, 'monthly', 'all', ''],
-    ['SVOL', 1721.341, 15.515646, 15.7, 6.0, 0.16, 'monthly', 'all', ''],
-    ['TLTW', 1031.331, 22.295132, 22.515, 7.0, 0.12, 'monthly', 'all', ''],
+    ["AIPI", 692.808, 34.04685, 35.68, 5.0, 0.124, "monthly", "all", ""],
+    ["CHPY", 463.050, 56.06939, 67.70, 6.0, 0.050, "monthly", "all", ""],
+    ["DIVO", 1317.602, 44.92944, 45.13, 10.0, 0.048, "monthly", "all", ""],
+    ["FEPI", 916.088, 39.99048, 42.93, 7.0, 0.120, "monthly", "all", ""],
+    ["GDXY", 3530.571, 13.10574, 12.71, 15.0, 0.180, "monthly", "all", ""],
+    ["IAU", 174.866, 84.63566, 85.55, 4.0, 0.000, "none", "none", ""],
+    ["IWMI", 314.353, 48.21481, 50.37, 4.0, 0.120, "monthly", "all", ""],
+    ["IYRI", 381.608, 46.93339, 49.16, 5.0, 0.080, "monthly", "all", ""],
+    ["MLPI", 333.107, 56.78753, 56.38, 4.0, 0.080, "quarterly", "3,6,9,12", ""],
+    ["QQQI", 719.369, 50.46252, 53.86, 10.0, 0.140, "monthly", "all", ""],
+    ["SPYI", 1262.507, 49.48005, 52.14, 12.0, 0.120, "monthly", "all", ""],
+    ["SVOL", 1596.886, 15.49701, 15.91, 6.0, 0.160, "monthly", "all", ""],
+    ["TLTW", 976.835, 22.28491, 22.30, 7.0, 0.120, "monthly", "all", ""],
 ]
 
 SMART_INCOME_TIERS = {
@@ -376,22 +384,178 @@ def read_embedded_state_payload() -> dict:
 
 
 def write_embedded_state_payload(payload: dict) -> None:
-    """Disabled: saving data must never modify the running app.py file."""
-    return
+    """Best-effort: refresh the portable snapshot inside this .py file.
+
+    Normal JSON files are still the primary save system. This embedded copy is
+    only a last-resort recovery layer for cases where sidecar JSON files vanish
+    or the app is opened from a different folder/name. If the app file is
+    read-only, this safely does nothing.
+    """
+    try:
+        app_file = Path(__file__).resolve()
+        source = app_file.read_text(encoding="utf-8")
+        replacement = "EMBEDDED_SAVED_STATE_JSON = r'''" + json.dumps(payload, indent=2) + "'''"
+        updated, count = re.subn(
+            r"EMBEDDED_SAVED_STATE_JSON\s*=\s*r'''[\s\S]*?'''",
+            replacement,
+            source,
+            count=1,
+        )
+        if count == 1 and updated != source:
+            app_file.write_text(updated, encoding="utf-8")
+    except Exception:
+        pass
+
+
+
+def get_streamlit_secret(name: str, default: str = "") -> str:
+    """Read a Streamlit secret without ever displaying the secret value."""
+    try:
+        value = st.secrets.get(name, default)
+    except Exception:
+        return default
+
+    if value is None:
+        return default
+    return str(value).strip()
+
+
+def get_github_persistence_config() -> dict:
+    token = get_streamlit_secret("GITHUB_TOKEN")
+    repo = get_streamlit_secret("GITHUB_REPO")
+    branch = get_streamlit_secret("GITHUB_BRANCH", "main")
+    state_path = get_streamlit_secret("GITHUB_STATE_PATH", GITHUB_STATE_DEFAULT_PATH)
+
+    configured = bool(token and repo and "/" in repo and branch and state_path)
+    return {
+        "configured": configured,
+        "token": token,
+        "repo": repo,
+        "branch": branch,
+        "state_path": state_path,
+    }
+
+
+def github_persistence_summary() -> str:
+    cfg = get_github_persistence_config()
+    if not cfg["configured"]:
+        return "not configured"
+    return f"configured: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+
+
+def github_contents_url(cfg: dict, include_ref: bool = False) -> str:
+    encoded_path = urllib.parse.quote(cfg["state_path"], safe="/")
+    url = f"https://api.github.com/repos/{cfg['repo']}/contents/{encoded_path}"
+    if include_ref:
+        url += "?ref=" + urllib.parse.quote(cfg["branch"], safe="")
+    return url
+
+
+def github_api_json(cfg: dict, method: str, url: str, body: dict | None = None) -> dict:
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {cfg['token']}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": "application/json",
+            "User-Agent": "retirement-dashboard-streamlit",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            raw = resp.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8")
+        except Exception:
+            detail = str(exc)
+        raise RuntimeError(f"GitHub API {method} failed with HTTP {exc.code}: {detail}") from exc
+
+
+def github_get_file_metadata(cfg: dict) -> dict | None:
+    try:
+        return github_api_json(cfg, "GET", github_contents_url(cfg, include_ref=True))
+    except RuntimeError as exc:
+        if "HTTP 404" in str(exc):
+            return None
+        raise
+
+
+def read_github_state_payload() -> tuple[dict, str]:
+    cfg = get_github_persistence_config()
+    if not cfg["configured"]:
+        return {}, "GitHub persistence not configured"
+
+    try:
+        meta = github_get_file_metadata(cfg)
+        if not meta:
+            return {}, f"No GitHub state file yet at {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+
+        encoded = str(meta.get("content", "")).replace("\n", "")
+        if not encoded:
+            return {}, "GitHub state file exists but has no content"
+
+        decoded = base64.b64decode(encoded.encode("utf-8")).decode("utf-8")
+        return json.loads(decoded), f"Loaded GitHub state from {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+    except Exception as exc:
+        return {}, f"GitHub load failed: {exc}"
+
+
+def write_github_state_payload(payload: dict) -> tuple[bool, str]:
+    cfg = get_github_persistence_config()
+    if not cfg["configured"]:
+        return False, "GitHub persistence not configured. Add GITHUB_TOKEN, GITHUB_REPO, and GITHUB_BRANCH in Streamlit Secrets."
+
+    try:
+        meta = github_get_file_metadata(cfg)
+        sha = meta.get("sha") if meta else None
+
+        clean_payload = make_payload_from_state(payload, force_timestamp=False)
+        content = base64.b64encode(json.dumps(clean_payload, indent=2).encode("utf-8")).decode("utf-8")
+        body = {
+            "message": f"Save retirement dashboard state {clean_payload.get('last_saved', '')}",
+            "content": content,
+            "branch": cfg["branch"],
+        }
+        if sha:
+            body["sha"] = sha
+
+        github_api_json(cfg, "PUT", github_contents_url(cfg, include_ref=False), body=body)
+        return True, f"GitHub cloud save verified: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+    except Exception as exc:
+        return False, f"GitHub cloud save failed: {exc}"
 
 
 def candidate_state_files() -> List[Path]:
-    """Use the original small local save set only.
-
-    Streamlit reruns must not scan or reconcile many copies from different
-    folders. The active file is authoritative; backup and last-good are only
-    local recovery choices if the active file is missing or damaged.
-    """
-    return [STATE_FILE, BACKUP_FILE, LAST_GOOD_FILE]
+    return [
+        STATE_FILE,
+        LAST_GOOD_FILE,
+        BACKUP_FILE,
+        HOME_STATE_FILE,
+        HOME_LAST_GOOD_FILE,
+        HOME_BACKUP_FILE,
+        LEGACY_STATE_FILE,
+        LEGACY_LAST_GOOD_FILE,
+        LEGACY_BACKUP_FILE,
+    ]
 
 
 def make_payload_from_state(state: dict, force_timestamp: bool = False) -> dict:
-    df = normalize_portfolio_df(state["portfolio_df"])
+    source_df = state["portfolio_df"]
+    if isinstance(source_df, pd.DataFrame):
+        df = normalize_portfolio_df(source_df)
+    else:
+        df = normalize_portfolio_df(pd.DataFrame(source_df))
     saved_time = str(state.get("last_saved", ""))
     if force_timestamp or saved_time.strip() == "":
         saved_time = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
@@ -458,24 +622,24 @@ def is_candidate_valid(item: dict) -> bool:
     return total >= CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS
 
 
-def writable_state_files() -> List[Path]:
-    """Only the active state file is required and verified."""
-    return [STATE_FILE]
-
-
 def write_payload_everywhere(payload: dict) -> None:
-    """Write one authoritative save and two non-blocking recovery copies.
-
-    The active file must succeed. A backup failure must never blank the app or
-    turn a valid Save click into an error.
-    """
     write_json_atomic(STATE_FILE, payload)
+    write_json_atomic(BACKUP_FILE, payload)
+    write_json_atomic(LAST_GOOD_FILE, payload)
 
-    for path in [BACKUP_FILE, LAST_GOOD_FILE]:
-        try:
-            write_json_atomic(path, payload)
-        except Exception:
-            pass
+    write_json_atomic(HOME_STATE_FILE, payload)
+    write_json_atomic(HOME_BACKUP_FILE, payload)
+    write_json_atomic(HOME_LAST_GOOD_FILE, payload)
+
+    write_json_atomic(LEGACY_STATE_FILE, payload)
+    write_json_atomic(LEGACY_BACKUP_FILE, payload)
+    write_json_atomic(LEGACY_LAST_GOOD_FILE, payload)
+
+    # Do not rewrite the running Streamlit source file during Save. On Streamlit
+    # Cloud, modifying __file__ can trigger a source reload/redeploy in the middle
+    # of the save callback and leave the page blank. The embedded snapshot remains
+    # available as a read-only recovery baseline; durable saves continue to use
+    # the verified JSON copies above and the GitHub cloud state below.
 
 
 def load_state() -> dict:
@@ -545,6 +709,27 @@ def load_state() -> dict:
         except Exception as exc:
             errors.append(f"EMBEDDED_APP_FILE_SNAPSHOT: {exc}")
 
+    github_raw, github_status = read_github_state_payload()
+    if github_raw:
+        try:
+            github_loaded = normalize_state_payload(github_raw)
+            github_item = {
+                "path": Path("GITHUB_REPO_STATE"),
+                "state": github_loaded,
+                "last_saved_dt": parse_saved_time(github_loaded.get("last_saved", "")),
+                "is_primary": False,
+            }
+            if is_candidate_valid(github_item):
+                candidates.append(github_item)
+            else:
+                rejected.append(
+                    f"GITHUB_REPO_STATE | rejected stale/unsafe | contributions {format_dollars(github_loaded.get('total_contributions', 0.0))} | "
+                    f"protected floor {format_dollars(github_loaded.get('protected_min_contributions', 0.0))} | "
+                    f"schema {github_loaded.get('state_schema_version', 1)} | saved {github_loaded.get('last_saved', '') or 'unknown'}"
+                )
+        except Exception as exc:
+            github_status = f"GitHub state normalization failed: {exc}"
+
     if candidates:
         primary = next((item for item in candidates if item["is_primary"]), None)
         ranked_candidates = sorted(candidates, key=candidate_sort_key, reverse=True)
@@ -597,6 +782,7 @@ def load_state() -> dict:
         loaded["_version_mismatch_fixed"] = version_mismatch_fixed
         loaded["_auto_repair_performed"] = auto_repair_performed
         loaded["_auto_repair_error"] = auto_repair_error
+        loaded["_github_load_status"] = github_status
         loaded["_active_state_file"] = str(STATE_FILE)
         loaded["_load_errors"] = errors
         loaded["_candidate_summary"] = [
@@ -621,6 +807,7 @@ def load_state() -> dict:
     state["_loaded_from"] = "CURRENT PROTECTED FULL-SNAPSHOT BASELINE - no valid saved file found"
     state["_version_mismatch_fixed"] = False
     state["_active_state_file"] = str(STATE_FILE)
+    state["_github_load_status"] = github_status
     state["_load_errors"] = errors
     state["_candidate_summary"] = []
     state["_rejected_summary"] = rejected
@@ -716,7 +903,7 @@ def save_state() -> bool:
 
         intended_holdings = portfolio_save_signature(payload["portfolio_df"])
 
-        for verify_path in writable_state_files():
+        for verify_path in candidate_state_files():
             verify = normalize_state_payload(read_json_file(verify_path))
             if round_money(verify.get("cash_fdrxx", -1)) != round_money(payload["cash_fdrxx"]):
                 raise RuntimeError(f"Save verification failed for {verify_path}: cash did not match after write.")
@@ -729,9 +916,14 @@ def save_state() -> bool:
             if saved_holdings != intended_holdings:
                 raise RuntimeError(f"Save verification failed for {verify_path}: holdings did not match after write.")
 
+        github_ok, github_message = write_github_state_payload(payload)
+        st.session_state.github_save_status = github_message
+        if not github_ok:
+            raise RuntimeError(github_message)
+
         st.session_state.protected_min_contributions = payload["protected_min_contributions"]
         st.session_state.last_saved = payload["last_saved"]
-        st.session_state.loaded_from = f"CURRENT FULL SNAPSHOT - saved and verified in active state file"
+        st.session_state.loaded_from = "CURRENT FULL SNAPSHOT - saved successfully to local backups and GitHub cloud state"
         st.session_state.last_save_error = ""
         return True
 
@@ -803,6 +995,8 @@ def init_state() -> None:
     st.session_state.last_deploy_message = loaded.get("last_deploy_message", "")
     st.session_state.last_cash_message = loaded.get("last_cash_message", "")
     st.session_state.last_save_error = ""
+    st.session_state.github_load_status = loaded.get("_github_load_status", "")
+    st.session_state.github_save_status = ""
     st.session_state.authorize_contribution_reduction_once = False
     st.session_state.editor_version = 0
     st.session_state.app_initialized = True
@@ -1628,6 +1822,8 @@ def render_state_health_box() -> None:
     good_loader = (
         "PRIMARY ACTIVE FULL SNAPSHOT" in loaded_from
         or "BEST VALID FULL SNAPSHOT" in loaded_from
+        or "BEST PROTECTED FULL SNAPSHOT" in loaded_from
+        or "GITHUB_REPO_STATE" in loaded_from
         or "BACKUP RECOVERY FULL SNAPSHOT" in loaded_from
         or "CURRENT FULL SNAPSHOT" in loaded_from
         or "UPLOADED SNAPSHOT" in loaded_from
@@ -1664,6 +1860,11 @@ def render_state_health_box() -> None:
         f"Hidden save: {state_exists} | Hidden backup: {backup_exists} | Hidden last-good: {last_good_exists} | "
         f"Root save: {legacy_exists} | Root backup: {legacy_backup_exists}"
     )
+    st.caption(f"GitHub cloud persistence: {github_persistence_summary()}")
+    if st.session_state.get("github_load_status"):
+        st.caption(f"GitHub load status: {st.session_state.github_load_status}")
+    if st.session_state.get("github_save_status"):
+        st.caption(f"GitHub save status: {st.session_state.github_save_status}")
 
     if st.session_state.get("auto_repair_performed", False):
         st.success("Automatic recovery ran: the best protected snapshot was promoted to every save and backup location.")
@@ -2091,7 +2292,7 @@ def render_system_tools() -> None:
         "Backup, restore, reload, and safety tools."
     )
 
-    st.warning("Every Save button writes one active save plus two best-effort local recovery copies. Use Download Snapshot Backup only when you want an outside copy before big changes.")
+    st.warning("Every Save button now writes local backups AND the GitHub cloud state file. Use Download Snapshot Backup only when you want an outside copy before big changes.")
 
     c1, c2, c3 = st.columns(3)
 
@@ -2208,6 +2409,9 @@ def render_system_tools() -> None:
     st.markdown("#### Save Diagnostics")
     st.caption(f"App version: {APP_BASELINE_VERSION}")
     st.caption(f"State schema version: {STATE_SCHEMA_VERSION}")
+    st.caption(f"GitHub cloud persistence: {github_persistence_summary()}")
+    st.caption(f"GitHub load status: {st.session_state.get('github_load_status', '')}")
+    st.caption(f"GitHub save status: {st.session_state.get('github_save_status', '')}")
     st.caption(f"Current working directory: {Path.cwd()}")
     st.caption(f"App directory: {APP_DIR}")
     st.caption(f"Hidden active state file: {STATE_FILE}")
@@ -2255,7 +2459,7 @@ def main() -> None:
 
     st.markdown('<div class="dashboard-title">Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="dashboard-subtitle">Regular production app &#8226; simple active save &#8226; local backup recovery &#8226; stale-save rejection.</div>',
+        '<div class="dashboard-subtitle">Regular production app &#8226; GitHub cloud save &#8226; protected recovery &#8226; stale-save rejection.</div>',
         unsafe_allow_html=True,
     )
 

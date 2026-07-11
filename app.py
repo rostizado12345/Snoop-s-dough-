@@ -21,7 +21,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-07-10-stable-save-repair-v13"
+APP_BASELINE_VERSION = "2026-07-10-stable-save-repair-v14"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -29,7 +29,7 @@ REALISTIC_INCOME_FACTOR = 0.843
 CONSERVATIVE_INCOME_FACTOR = 0.632
 
 APP_DIR = Path(__file__).resolve().parent
-STATE_DIR = APP_DIR / ".retirement_dashboard_state"
+STATE_DIR = Path.home() / ".retirement_dashboard_state"
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 # App-folder copies are kept for compatibility with the existing dashboard.
@@ -55,7 +55,7 @@ HOME_LAST_GOOD_FILE = HOME_STATE_DIR / "retirement_dashboard_state_last_good.jso
 # Last-resort portable snapshot. This is refreshed on Save when the app file is writable.
 EMBEDDED_SAVED_STATE_JSON = r'''{
   "state_schema_version": 2,
-  "app_baseline_version": "2026-07-10-stable-save-repair-v13",
+  "app_baseline_version": "2026-07-10-stable-save-repair-v14",
   "portfolio_df": [
     {
       "ticker": "AIPI",
@@ -385,11 +385,21 @@ def read_json_file(path: Path) -> dict:
 
 
 def write_json_atomic(path: Path, payload: dict) -> None:
+    """Durably replace one JSON file without exposing a partial snapshot."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_file = path.with_suffix(path.suffix + ".tmp")
-    with open(temp_file, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
-    os.replace(temp_file, path)
+    temp_file = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, allow_nan=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_file, path)
+    finally:
+        try:
+            if temp_file.exists():
+                temp_file.unlink()
+        except Exception:
+            pass
 
 
 def read_embedded_state_payload() -> dict:
@@ -658,30 +668,17 @@ def is_candidate_valid(item: dict) -> bool:
 
 
 def write_payload_everywhere(payload: dict) -> List[Path]:
-    """Write the snapshot wherever possible and return only verified-write candidates.
+    """Write verified runtime snapshots without touching the deployed source tree.
 
-    Streamlit Cloud and GitHub checkouts can contain paths that exist but are read-only.
-    A failed optional copy must not make a successful save look like a dashboard crash.
+    Streamlit watches the app checkout for changes. Writing state JSON beside app.py
+    can trigger a restart in the middle of a save, so source-directory files are
+    retained only as legacy read candidates and are never written by the app.
     """
-    targets = [
-        STATE_FILE, BACKUP_FILE, LAST_GOOD_FILE,
-        HOME_STATE_FILE, HOME_BACKUP_FILE, HOME_LAST_GOOD_FILE,
-        LEGACY_STATE_FILE, LEGACY_BACKUP_FILE, LEGACY_LAST_GOOD_FILE,
-    ]
+    targets = [HOME_STATE_FILE, HOME_BACKUP_FILE, HOME_LAST_GOOD_FILE]
     successes: List[Path] = []
     failures = []
-    seen = set()
 
     for path in targets:
-        # Some legacy and current paths can resolve to the same file. Write each once.
-        try:
-            identity = str(path.resolve())
-        except Exception:
-            identity = str(path)
-        if identity in seen:
-            continue
-        seen.add(identity)
-
         try:
             write_json_atomic(path, payload)
             successes.append(path)
@@ -689,7 +686,7 @@ def write_payload_everywhere(payload: dict) -> List[Path]:
             failures.append(f"{path}: {exc}")
 
     if not successes:
-        raise RuntimeError("Could not save the dashboard state to any writable location. " + " | ".join(failures))
+        raise RuntimeError("Could not save the dashboard state to a writable runtime location. " + " | ".join(failures))
 
     return successes
 
@@ -1256,22 +1253,35 @@ def refresh_saved_manual_prices(calc_df: pd.DataFrame, persist: bool = False) ->
     return changed
 
 
-def add_new_money(amount: float) -> None:
+def add_new_money(amount: float) -> bool:
     amount = round_money(amount)
     if amount <= 0:
-        return
+        return False
 
+    previous = {
+        "cash_fdrxx": st.session_state.cash_fdrxx,
+        "total_contributions": st.session_state.total_contributions,
+        "protected_min_contributions": st.session_state.protected_min_contributions,
+        "last_cash_message": st.session_state.get("last_cash_message", ""),
+    }
     st.session_state.cash_fdrxx = round_money(st.session_state.cash_fdrxx + amount)
     st.session_state.total_contributions = round_money(st.session_state.total_contributions + amount)
     st.session_state.protected_min_contributions = round_money(
         max(st.session_state.protected_min_contributions, st.session_state.total_contributions)
     )
     st.session_state.last_cash_message = f"Added new money: {format_dollars(amount)} to FDRXX."
-    save_state()
+
+    if save_state():
+        return True
+
+    for key, value in previous.items():
+        st.session_state[key] = value
+    return False
 
 
-def set_exact_cash(new_cash: float) -> None:
+def set_exact_cash(new_cash: float) -> bool:
     old_cash = round_money(st.session_state.cash_fdrxx)
+    old_message = st.session_state.get("last_cash_message", "")
     new_cash = round_money(new_cash)
     difference = round_money(new_cash - old_cash)
 
@@ -1280,7 +1290,12 @@ def set_exact_cash(new_cash: float) -> None:
         f"FDRXX cash set exactly to {format_dollars(new_cash)}. "
         f"Adjustment: {format_dollars(difference)}."
     )
-    save_state()
+    if save_state():
+        return True
+
+    st.session_state.cash_fdrxx = old_cash
+    st.session_state.last_cash_message = old_message
+    return False
 
 
 def deploy_cash_to_position(ticker: str, dollars: float, calc_df: pd.DataFrame) -> None:
@@ -2128,8 +2143,10 @@ def render_top_controls(calc: dict) -> None:
         set_cash_pressed = st.form_submit_button("Set Exact FDRXX Cash", use_container_width=True)
 
     if set_cash_pressed:
-        set_exact_cash(float(exact_cash))
-        st.success("Exact FDRXX cash saved.")
+        if set_exact_cash(float(exact_cash)):
+            st.success("Exact FDRXX cash saved.")
+        else:
+            st.error(f"Exact cash was not changed because the save failed: {st.session_state.last_save_error}")
         st.rerun()
 
     if st.session_state.get("last_cash_message"):
@@ -2176,7 +2193,8 @@ def render_top_controls(calc: dict) -> None:
     quick_amounts = [1000, 5000, 10000, 16000, 32000]
     for i, amt in enumerate(quick_amounts):
         if cols[i].button(f"+ ${amt:,.0f}", use_container_width=True):
-            add_new_money(float(amt))
+            if not add_new_money(float(amt)):
+                st.error(f"Deposit was not applied because the save failed: {st.session_state.last_save_error}")
             st.rerun()
 
     with st.form("custom_cash_form"):
@@ -2184,7 +2202,8 @@ def render_top_controls(calc: dict) -> None:
         add_custom = st.form_submit_button("Add Custom Deposit", use_container_width=True)
 
     if add_custom and custom_cash > 0:
-        add_new_money(float(custom_cash))
+        if not add_new_money(float(custom_cash)):
+            st.error(f"Deposit was not applied because the save failed: {st.session_state.last_save_error}")
         st.rerun()
 
 
@@ -2614,4 +2633,3 @@ def main() -> None:
         st.divider()
 
         render_system_tools()
-

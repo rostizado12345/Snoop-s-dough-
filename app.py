@@ -2327,4 +2327,13 @@ def main() -> None:
         st.divider()
 
         render_breakdowns(calc)
-        st
+        st.divider()
+
+        render_income_helper(calc)
+        st.divider()
+
+        render_system_tools()
+
+
+if __name__ == "__main__":
+    main()

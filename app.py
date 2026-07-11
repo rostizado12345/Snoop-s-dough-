@@ -21,7 +21,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-28-verified-backup-github-repair-v9"
+APP_BASELINE_VERSION = "2026-07-10-stable-save-repair-v12"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -55,7 +55,7 @@ HOME_LAST_GOOD_FILE = HOME_STATE_DIR / "retirement_dashboard_state_last_good.jso
 # Last-resort portable snapshot. This is refreshed on Save when the app file is writable.
 EMBEDDED_SAVED_STATE_JSON = r'''{
   "state_schema_version": 2,
-  "app_baseline_version": "2026-06-28-verified-backup-github-repair-v9",
+  "app_baseline_version": "2026-07-10-stable-save-repair-v12",
   "portfolio_df": [
     {
       "ticker": "AIPI",
@@ -201,9 +201,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
       "notes": ""
     }
   ],
-  "cash_fdrxx": 132923.13,
-  "total_contributions": 486299.07,
-  "protected_min_contributions": 486299.07,
+  "cash_fdrxx": 207923.13,
+  "total_contributions": 561299.07,
+  "protected_min_contributions": 561299.07,
   "use_live_prices": true,
   "auto_sync_prices": true,
   "last_price_sync": "2026-06-26 07:46:00 PM",
@@ -213,9 +213,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
   "last_cash_message": "FDRXX cash set exactly to $132,923.13 from verified backup snapshot."
 }'''
 
-DEFAULT_CASH_FDRXX = 132923.13
-DEFAULT_TOTAL_CONTRIBUTIONS = 486299.07
-CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS = 486299.07
+DEFAULT_CASH_FDRXX = 207923.13
+DEFAULT_TOTAL_CONTRIBUTIONS = 561299.07
+CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS = 561299.07
 VERIFIED_BACKUP_LAST_SAVED_EPOCH = 1782503982448705733
 
 DEFAULT_COLUMNS = [
@@ -404,28 +404,8 @@ def read_embedded_state_payload() -> dict:
 
 
 def write_embedded_state_payload(payload: dict) -> None:
-    """Best-effort: refresh the portable snapshot inside this .py file.
-
-    Normal JSON files are still the primary save system. This embedded copy is
-    only a last-resort recovery layer for cases where sidecar JSON files vanish
-    or the app is opened from a different folder/name. If the app file is
-    read-only, this safely does nothing.
-    """
-    try:
-        app_file = Path(__file__).resolve()
-        source = app_file.read_text(encoding="utf-8")
-        replacement = "EMBEDDED_SAVED_STATE_JSON = r'''" + json.dumps(payload, indent=2) + "'''"
-        updated, count = re.subn(
-            r"EMBEDDED_SAVED_STATE_JSON\s*=\s*r'''[\s\S]*?'''",
-            replacement,
-            source,
-            count=1,
-        )
-        if count == 1 and updated != source:
-            app_file.write_text(updated, encoding="utf-8")
-    except Exception:
-        pass
-
+    """Disabled intentionally: a running Streamlit app must never rewrite app.py."""
+    return
 
 
 def get_streamlit_secret(name: str, default: str = "") -> str:
@@ -678,19 +658,23 @@ def is_candidate_valid(item: dict) -> bool:
 
 
 def write_payload_everywhere(payload: dict) -> None:
-    write_json_atomic(STATE_FILE, payload)
-    write_json_atomic(BACKUP_FILE, payload)
-    write_json_atomic(LAST_GOOD_FILE, payload)
+    """Write the snapshot to every writable location without crashing on read-only paths."""
+    targets = [
+        STATE_FILE, BACKUP_FILE, LAST_GOOD_FILE,
+        HOME_STATE_FILE, HOME_BACKUP_FILE, HOME_LAST_GOOD_FILE,
+        LEGACY_STATE_FILE, LEGACY_BACKUP_FILE, LEGACY_LAST_GOOD_FILE,
+    ]
+    successes = []
+    failures = []
+    for path in targets:
+        try:
+            write_json_atomic(path, payload)
+            successes.append(str(path))
+        except Exception as exc:
+            failures.append(f"{path}: {exc}")
 
-    write_json_atomic(HOME_STATE_FILE, payload)
-    write_json_atomic(HOME_BACKUP_FILE, payload)
-    write_json_atomic(HOME_LAST_GOOD_FILE, payload)
-
-    write_json_atomic(LEGACY_STATE_FILE, payload)
-    write_json_atomic(LEGACY_BACKUP_FILE, payload)
-    write_json_atomic(LEGACY_LAST_GOOD_FILE, payload)
-
-    write_embedded_state_payload(payload)
+    if not successes:
+        raise RuntimeError("Could not save the dashboard state to any writable location. " + " | ".join(failures))
 
 
 def load_state() -> dict:
@@ -978,15 +962,22 @@ def save_state() -> bool:
             if saved_holdings != intended_holdings:
                 raise RuntimeError(f"Save verification failed for {verify_path}: holdings did not match after write.")
 
-        github_ok, github_message = write_github_state_payload(payload)
-        st.session_state.github_save_status = github_message
-        if not github_ok:
-            raise RuntimeError(github_message)
+        cfg = get_github_persistence_config()
+        if cfg.get("configured"):
+            github_ok, github_message = write_github_state_payload(payload)
+            st.session_state.github_save_status = github_message
+        else:
+            github_ok = False
+            github_message = "GitHub cloud save is not configured; the verified local snapshot was saved successfully."
+            st.session_state.github_save_status = github_message
 
         st.session_state.protected_min_contributions = payload["protected_min_contributions"]
         st.session_state.last_saved = payload["last_saved"]
         st.session_state.last_saved_epoch = payload.get("last_saved_epoch", 0)
-        st.session_state.loaded_from = "CURRENT FULL SNAPSHOT - saved successfully to local backups and GitHub cloud state"
+        st.session_state.loaded_from = (
+            "CURRENT FULL SNAPSHOT - saved successfully to local backups"
+            + (" and GitHub cloud state" if github_ok else " (GitHub cloud unavailable; local save retained)")
+        )
         st.session_state.last_save_error = ""
         return True
 
@@ -2358,7 +2349,7 @@ def render_system_tools() -> None:
         "Backup, restore, reload, and safety tools."
     )
 
-    st.warning("Every Save button now writes local backups AND the GitHub cloud state file. Use Download Snapshot Backup only when you want an outside copy before big changes.")
+    st.warning("Every Save button writes verified local backups. GitHub cloud backup is used only when it is correctly configured; a GitHub error will not crash or erase the app.")
 
     c1, c2, c3 = st.columns(3)
 
@@ -2527,7 +2518,7 @@ def main() -> None:
 
     st.markdown('<div class="dashboard-title">Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="dashboard-subtitle">Regular production app &#8226; GitHub cloud save &#8226; protected recovery &#8226; stale-save rejection.</div>',
+        '<div class="dashboard-subtitle">Stable production app &#8226; protected local save &#8226; optional GitHub backup &#8226; stale-save rejection.</div>',
         unsafe_allow_html=True,
     )
 

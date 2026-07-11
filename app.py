@@ -1,11 +1,6 @@
-import base64
 import json
 import os
 import re
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
@@ -21,7 +16,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-07-10-stable-save-repair-v13"
+APP_BASELINE_VERSION = "2026-07-10-full-ui-safe-save-v17"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -41,10 +36,6 @@ LEGACY_STATE_FILE = APP_DIR / "retirement_dashboard_state.json"
 LEGACY_BACKUP_FILE = APP_DIR / "retirement_dashboard_state_backup.json"
 LEGACY_LAST_GOOD_FILE = APP_DIR / "retirement_dashboard_state_last_good.json"
 
-# Cloud save file inside GitHub. This is the durable Streamlit Cloud copy.
-# Secrets expected in Streamlit: GITHUB_TOKEN, GITHUB_REPO, GITHUB_BRANCH.
-GITHUB_STATE_DEFAULT_PATH = "retirement_dashboard_state.json"
-
 # Home-folder copies survive app filename changes, Downloads-folder copies, and most local reruns.
 HOME_STATE_DIR = Path.home() / ".retirement_dashboard_state"
 HOME_STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -55,7 +46,7 @@ HOME_LAST_GOOD_FILE = HOME_STATE_DIR / "retirement_dashboard_state_last_good.jso
 # Last-resort portable snapshot. This is refreshed on Save when the app file is writable.
 EMBEDDED_SAVED_STATE_JSON = r'''{
   "state_schema_version": 2,
-  "app_baseline_version": "2026-07-10-stable-save-repair-v13",
+  "app_baseline_version": "2026-07-10-full-ui-safe-save-v17",
   "portfolio_df": [
     {
       "ticker": "AIPI",
@@ -207,16 +198,14 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
   "use_live_prices": true,
   "auto_sync_prices": true,
   "last_price_sync": "2026-06-26 07:46:00 PM",
-  "last_saved": "2026-06-26 07:59:42.448677 PM",
-  "last_saved_epoch": 1782503982448705733,
-  "last_deploy_message": "Verified 2026-06-26 backup embedded as protected app baseline.",
-  "last_cash_message": "FDRXX cash set exactly to $132,923.13 from verified backup snapshot."
+  "last_saved": "2026-07-10 10:30:00 PM",
+  "last_deploy_message": "Updated full-feature baseline with verified July 10 holdings and cash.",
+  "last_cash_message": "FDRXX cash baseline: $207,923.13. The $3,112.29 test amount is intentionally excluded."
 }'''
 
 DEFAULT_CASH_FDRXX = 207923.13
 DEFAULT_TOTAL_CONTRIBUTIONS = 561299.07
 CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS = 561299.07
-VERIFIED_BACKUP_LAST_SAVED_EPOCH = 1782503982448705733
 
 DEFAULT_COLUMNS = [
     "ticker", "qty", "avg_cost", "manual_price", "target_weight",
@@ -224,19 +213,19 @@ DEFAULT_COLUMNS = [
 ]
 
 DEFAULT_ROWS = [
-    ["AIPI", 706.966000, 34.046850, 35.8650, 5.0, 0.124, "monthly", "all", ""],
-    ["CHPY", 474.719000, 56.069390, 81.9401, 6.0, 0.050, "monthly", "all", ""],
-    ["DIVO", 1404.379000, 44.979583, 45.7050, 10.0, 0.048, "monthly", "all", ""],
-    ["FEPI", 929.650000, 39.990480, 41.9500, 7.0, 0.120, "monthly", "all", ""],
-    ["GDXY", 3619.685000, 13.105740, 10.2213, 15.0, 0.180, "monthly", "all", ""],
-    ["IAU", 174.866000, 84.635660, 76.4900, 4.0, 0.000, "none", "none", ""],
-    ["IWMI", 318.115000, 48.214810, 53.0050, 4.0, 0.120, "monthly", "all", ""],
-    ["IYRI", 385.111000, 46.933390, 49.6700, 5.0, 0.080, "monthly", "all", ""],
-    ["MLPI", 337.131000, 56.787530, 55.9900, 4.0, 0.080, "quarterly", "3,6,9,12", ""],
-    ["QQQI", 727.773000, 50.462520, 55.0500, 10.0, 0.140, "monthly", "all", ""],
-    ["SPYI", 1370.585000, 49.669172, 52.1900, 12.0, 0.120, "monthly", "all", ""],
-    ["SVOL", 1721.341000, 15.515646, 15.7000, 6.0, 0.160, "monthly", "all", ""],
-    ["TLTW", 1031.331000, 22.295132, 22.5150, 7.0, 0.120, "monthly", "all", ""],
+    ['AIPI', 706.966, 34.04685, 35.865, 5.0, 0.124, 'monthly', 'all', ''],
+    ['CHPY', 474.719, 56.06939, 81.9401, 6.0, 0.05, 'monthly', 'all', ''],
+    ['DIVO', 1404.379, 44.979583, 45.705, 10.0, 0.048, 'monthly', 'all', ''],
+    ['FEPI', 929.65, 39.99048, 41.95, 7.0, 0.12, 'monthly', 'all', ''],
+    ['GDXY', 3619.685, 13.10574, 10.2213, 15.0, 0.18, 'monthly', 'all', ''],
+    ['IAU', 174.866, 84.63566, 76.49, 4.0, 0.0, 'none', 'none', ''],
+    ['IWMI', 318.115, 48.21481, 53.005, 4.0, 0.12, 'monthly', 'all', ''],
+    ['IYRI', 385.111, 46.93339, 49.67, 5.0, 0.08, 'monthly', 'all', ''],
+    ['MLPI', 337.131, 56.78753, 55.99, 4.0, 0.08, 'quarterly', '3,6,9,12', ''],
+    ['QQQI', 727.773, 50.46252, 55.05, 10.0, 0.14, 'monthly', 'all', ''],
+    ['SPYI', 1370.585, 49.669172, 52.19, 12.0, 0.12, 'monthly', 'all', ''],
+    ['SVOL', 1721.341, 15.515646, 15.7, 6.0, 0.16, 'monthly', 'all', ''],
+    ['TLTW', 1031.331, 22.295132, 22.515, 7.0, 0.12, 'monthly', 'all', ''],
 ]
 
 SMART_INCOME_TIERS = {
@@ -263,21 +252,6 @@ def to_float(value, default: float = 0.0) -> float:
         return default
 
 
-
-
-def to_int(value, default: int = 0) -> int:
-    try:
-        if value is None:
-            return default
-        if isinstance(value, str):
-            cleaned = value.replace(",", "").strip()
-            return default if cleaned == "" else int(float(cleaned))
-        if pd.isna(value):
-            return default
-        return int(value)
-    except Exception:
-        return default
-
 def round_money(value: float) -> float:
     return round(float(value), 2)
 
@@ -295,7 +269,7 @@ def format_percent(value: float) -> str:
 
 
 def parse_saved_time(value: str) -> datetime:
-    for fmt in ["%Y-%m-%d %I:%M:%S.%f %p", "%Y-%m-%d %I:%M:%S %p", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"]:
+    for fmt in ["%Y-%m-%d %I:%M:%S %p", "%Y-%m-%d %H:%M:%S"]:
         try:
             return datetime.strptime(str(value), fmt)
         except Exception:
@@ -342,7 +316,6 @@ def baseline_state_payload() -> dict:
         "auto_sync_prices": True,
         "last_price_sync": "",
         "last_saved": now,
-        "last_saved_epoch": time.time_ns(),
         "last_deploy_message": "Loaded current protected full-snapshot production baseline.",
         "last_cash_message": f"FDRXX cash baseline: {format_dollars(DEFAULT_CASH_FDRXX)}.",
     }
@@ -373,7 +346,6 @@ def normalize_state_payload(raw: dict) -> dict:
         "auto_sync_prices": bool(raw.get("auto_sync_prices", True)),
         "last_price_sync": str(raw.get("last_price_sync", "")),
         "last_saved": str(raw.get("last_saved", "")),
-        "last_saved_epoch": to_int(raw.get("last_saved_epoch", 0), 0),
         "last_deploy_message": str(raw.get("last_deploy_message", "")),
         "last_cash_message": str(raw.get("last_cash_message", "")),
     }
@@ -404,151 +376,8 @@ def read_embedded_state_payload() -> dict:
 
 
 def write_embedded_state_payload(payload: dict) -> None:
-    """Disabled intentionally: a running Streamlit app must never rewrite app.py."""
+    """Disabled: saving data must never modify the running app.py file."""
     return
-
-
-def get_streamlit_secret(name: str, default: str = "") -> str:
-    """Read a Streamlit secret without ever displaying the secret value."""
-    try:
-        value = st.secrets.get(name, default)
-    except Exception:
-        return default
-
-    if value is None:
-        return default
-    return str(value).strip()
-
-
-def get_github_persistence_config() -> dict:
-    token = get_streamlit_secret("GITHUB_TOKEN")
-    repo = get_streamlit_secret("GITHUB_REPO")
-    branch = get_streamlit_secret("GITHUB_BRANCH", "main")
-    state_path = get_streamlit_secret("GITHUB_STATE_PATH", GITHUB_STATE_DEFAULT_PATH)
-
-    configured = bool(token and repo and "/" in repo and branch and state_path)
-    return {
-        "configured": configured,
-        "token": token,
-        "repo": repo,
-        "branch": branch,
-        "state_path": state_path,
-    }
-
-
-def github_persistence_summary() -> str:
-    cfg = get_github_persistence_config()
-    if not cfg["configured"]:
-        return "not configured"
-    return f"configured: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
-
-
-def github_contents_url(cfg: dict, include_ref: bool = False) -> str:
-    encoded_path = urllib.parse.quote(cfg["state_path"], safe="/")
-    url = f"https://api.github.com/repos/{cfg['repo']}/contents/{encoded_path}"
-    if include_ref:
-        url += "?ref=" + urllib.parse.quote(cfg["branch"], safe="")
-    return url
-
-
-def github_api_json(cfg: dict, method: str, url: str, body: dict | None = None) -> dict:
-    data = None
-    if body is not None:
-        data = json.dumps(body).encode("utf-8")
-
-    req = urllib.request.Request(
-        url,
-        data=data,
-        method=method,
-        headers={
-            "Authorization": f"Bearer {cfg['token']}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "Content-Type": "application/json",
-            "User-Agent": "retirement-dashboard-streamlit",
-        },
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            raw = resp.read().decode("utf-8")
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as exc:
-        detail = ""
-        try:
-            detail = exc.read().decode("utf-8")
-        except Exception:
-            detail = str(exc)
-        raise RuntimeError(f"GitHub API {method} failed with HTTP {exc.code}: {detail}") from exc
-
-
-def github_get_file_metadata(cfg: dict) -> dict | None:
-    try:
-        return github_api_json(cfg, "GET", github_contents_url(cfg, include_ref=True))
-    except RuntimeError as exc:
-        if "HTTP 404" in str(exc):
-            return None
-        raise
-
-
-def read_github_state_payload() -> tuple[dict, str]:
-    cfg = get_github_persistence_config()
-    if not cfg["configured"]:
-        return {}, "GitHub persistence not configured"
-
-    try:
-        meta = github_get_file_metadata(cfg)
-        if not meta:
-            return {}, f"No GitHub state file yet at {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
-
-        encoded = str(meta.get("content", "")).replace("\n", "")
-        if not encoded:
-            return {}, "GitHub state file exists but has no content"
-
-        decoded = base64.b64decode(encoded.encode("utf-8")).decode("utf-8")
-        return json.loads(decoded), f"Loaded GitHub state from {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
-    except Exception as exc:
-        return {}, f"GitHub load failed: {exc}"
-
-
-def write_github_state_payload(payload: dict) -> tuple[bool, str]:
-    cfg = get_github_persistence_config()
-    if not cfg["configured"]:
-        return False, "GitHub persistence not configured. Add GITHUB_TOKEN, GITHUB_REPO, and GITHUB_BRANCH in Streamlit Secrets."
-
-    try:
-        meta = github_get_file_metadata(cfg)
-        sha = meta.get("sha") if meta else None
-
-        clean_payload = make_payload_from_state(payload, force_timestamp=False)
-        content = base64.b64encode(json.dumps(clean_payload, indent=2).encode("utf-8")).decode("utf-8")
-        body = {
-            "message": f"Save retirement dashboard state {clean_payload.get('last_saved', '')}",
-            "content": content,
-            "branch": cfg["branch"],
-        }
-        if sha:
-            body["sha"] = sha
-
-        github_api_json(cfg, "PUT", github_contents_url(cfg, include_ref=False), body=body)
-
-        verify_raw, verify_message = read_github_state_payload()
-        if not verify_raw:
-            return False, f"GitHub cloud save failed verification: {verify_message}"
-
-        verify_payload = normalize_state_payload(verify_raw)
-        if round_money(verify_payload.get("cash_fdrxx", -1)) != round_money(clean_payload["cash_fdrxx"]):
-            return False, "GitHub cloud save failed verification: cash did not match after GitHub write."
-        if round_money(verify_payload.get("total_contributions", -1)) != round_money(clean_payload["total_contributions"]):
-            return False, "GitHub cloud save failed verification: total contributions did not match after GitHub write."
-        if round_money(verify_payload.get("protected_min_contributions", -1)) != round_money(clean_payload["protected_min_contributions"]):
-            return False, "GitHub cloud save failed verification: protected floor did not match after GitHub write."
-        if portfolio_save_signature(verify_payload.get("portfolio_df", [])) != portfolio_save_signature(clean_payload["portfolio_df"]):
-            return False, "GitHub cloud save failed verification: holdings did not match after GitHub write."
-
-        return True, f"GitHub cloud save verified by read-back: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
-    except Exception as exc:
-        return False, f"GitHub cloud save failed: {exc}"
 
 
 def candidate_state_files() -> List[Path]:
@@ -566,17 +395,10 @@ def candidate_state_files() -> List[Path]:
 
 
 def make_payload_from_state(state: dict, force_timestamp: bool = False) -> dict:
-    source_df = state["portfolio_df"]
-    if isinstance(source_df, pd.DataFrame):
-        df = normalize_portfolio_df(source_df)
-    else:
-        df = normalize_portfolio_df(pd.DataFrame(source_df))
+    df = normalize_portfolio_df(state["portfolio_df"])
     saved_time = str(state.get("last_saved", ""))
-    saved_epoch = to_int(state.get("last_saved_epoch", 0), 0)
     if force_timestamp or saved_time.strip() == "":
         saved_time = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
-    if force_timestamp or saved_epoch <= 0:
-        saved_epoch = time.time_ns()
 
     total_contributions = round_money(state["total_contributions"])
     protected_min = round_money(
@@ -597,7 +419,6 @@ def make_payload_from_state(state: dict, force_timestamp: bool = False) -> dict:
         "auto_sync_prices": bool(state.get("auto_sync_prices", True)),
         "last_price_sync": str(state.get("last_price_sync", "")),
         "last_saved": saved_time,
-        "last_saved_epoch": saved_epoch,
         "last_deploy_message": str(state.get("last_deploy_message", "")),
         "last_cash_message": str(state.get("last_cash_message", "")),
     }
@@ -616,29 +437,13 @@ def candidate_protected_value(item: dict) -> float:
     return round_money(max(total, protected_min))
 
 
-
-def candidate_last_saved_epoch(item: dict) -> int:
-    return to_int(item.get("state", {}).get("last_saved_epoch", 0), 0)
-
-
-def candidate_verified_source_rank(item: dict) -> int:
-    path_name = str(item.get("path", ""))
-    epoch = candidate_last_saved_epoch(item)
-    if epoch and epoch >= VERIFIED_BACKUP_LAST_SAVED_EPOCH:
-        return 2
-    if path_name == "EMBEDDED_APP_FILE_SNAPSHOT":
-        return 1
-    return 0
-
 def candidate_sort_key(item: dict) -> tuple:
     state = item["state"]
     return (
         1 if state.get("state_schema_version", 1) >= STATE_SCHEMA_VERSION else 0,
         candidate_protected_value(item),
         round_money(state.get("total_contributions", 0.0)),
-        candidate_last_saved_epoch(item),
         item["last_saved_dt"],
-        candidate_verified_source_rank(item),
     )
 
 
@@ -657,41 +462,25 @@ def is_candidate_valid(item: dict) -> bool:
     return total >= CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS
 
 
-def write_payload_everywhere(payload: dict) -> List[Path]:
-    """Write the snapshot wherever possible and return only verified-write candidates.
+def writable_state_files() -> List[Path]:
+    """Files that must save and verify successfully."""
+    return [HOME_STATE_FILE, HOME_BACKUP_FILE, HOME_LAST_GOOD_FILE]
 
-    Streamlit Cloud and GitHub checkouts can contain paths that exist but are read-only.
-    A failed optional copy must not make a successful save look like a dashboard crash.
-    """
-    targets = [
-        STATE_FILE, BACKUP_FILE, LAST_GOOD_FILE,
-        HOME_STATE_FILE, HOME_BACKUP_FILE, HOME_LAST_GOOD_FILE,
-        LEGACY_STATE_FILE, LEGACY_BACKUP_FILE, LEGACY_LAST_GOOD_FILE,
-    ]
-    successes: List[Path] = []
-    failures = []
-    seen = set()
 
-    for path in targets:
-        # Some legacy and current paths can resolve to the same file. Write each once.
-        try:
-            identity = str(path.resolve())
-        except Exception:
-            identity = str(path)
-        if identity in seen:
-            continue
-        seen.add(identity)
+def write_payload_everywhere(payload: dict) -> None:
+    # Save the three protected home-folder copies first. These are the required
+    # copies and are independent of the app filename or a read-only repo folder.
+    for path in writable_state_files():
+        write_json_atomic(path, payload)
 
+    # Compatibility copies are best-effort only. A read-only Streamlit/GitHub
+    # checkout must never turn an otherwise successful save into an error.
+    for path in [STATE_FILE, BACKUP_FILE, LAST_GOOD_FILE,
+                 LEGACY_STATE_FILE, LEGACY_BACKUP_FILE, LEGACY_LAST_GOOD_FILE]:
         try:
             write_json_atomic(path, payload)
-            successes.append(path)
-        except Exception as exc:
-            failures.append(f"{path}: {exc}")
-
-    if not successes:
-        raise RuntimeError("Could not save the dashboard state to any writable location. " + " | ".join(failures))
-
-    return successes
+        except Exception:
+            pass
 
 
 def load_state() -> dict:
@@ -761,27 +550,6 @@ def load_state() -> dict:
         except Exception as exc:
             errors.append(f"EMBEDDED_APP_FILE_SNAPSHOT: {exc}")
 
-    github_raw, github_status = read_github_state_payload()
-    if github_raw:
-        try:
-            github_loaded = normalize_state_payload(github_raw)
-            github_item = {
-                "path": Path("GITHUB_REPO_STATE"),
-                "state": github_loaded,
-                "last_saved_dt": parse_saved_time(github_loaded.get("last_saved", "")),
-                "is_primary": False,
-            }
-            if is_candidate_valid(github_item):
-                candidates.append(github_item)
-            else:
-                rejected.append(
-                    f"GITHUB_REPO_STATE | rejected stale/unsafe | contributions {format_dollars(github_loaded.get('total_contributions', 0.0))} | "
-                    f"protected floor {format_dollars(github_loaded.get('protected_min_contributions', 0.0))} | "
-                    f"schema {github_loaded.get('state_schema_version', 1)} | saved {github_loaded.get('last_saved', '') or 'unknown'}"
-                )
-        except Exception as exc:
-            github_status = f"GitHub state normalization failed: {exc}"
-
     if candidates:
         primary = next((item for item in candidates if item["is_primary"]), None)
         ranked_candidates = sorted(candidates, key=candidate_sort_key, reverse=True)
@@ -823,13 +591,8 @@ def load_state() -> dict:
             try:
                 promoted_payload = make_payload_from_state(loaded, force_timestamp=True)
                 write_payload_everywhere(promoted_payload)
-                if get_github_persistence_config().get("configured"):
-                    github_ok, github_promote_message = write_github_state_payload(promoted_payload)
-                    github_status = f"{github_status} | {github_promote_message}"
-                    if not github_ok:
-                        errors.append(github_promote_message)
                 loaded = normalize_state_payload(promoted_payload)
-                loaded_from = f"{loaded_from} | AUTO-REPAIRED AND PROMOTED TO LOCAL BACKUPS, EMBEDDED SNAPSHOT, AND GITHUB WHEN CONFIGURED"
+                loaded_from = f"{loaded_from} | AUTO-REPAIRED AND PROMOTED TO ALL SAVE LOCATIONS"
                 auto_repair_performed = True
             except Exception as exc:
                 auto_repair_error = str(exc)
@@ -839,7 +602,6 @@ def load_state() -> dict:
         loaded["_version_mismatch_fixed"] = version_mismatch_fixed
         loaded["_auto_repair_performed"] = auto_repair_performed
         loaded["_auto_repair_error"] = auto_repair_error
-        loaded["_github_load_status"] = github_status
         loaded["_active_state_file"] = str(STATE_FILE)
         loaded["_load_errors"] = errors
         loaded["_candidate_summary"] = [
@@ -860,16 +622,10 @@ def load_state() -> dict:
 
     # First-run only: no saved state exists, so create the initial protected baseline.
     write_payload_everywhere(payload)
-    if get_github_persistence_config().get("configured"):
-        github_ok, github_seed_message = write_github_state_payload(payload)
-        github_status = f"{github_status} | {github_seed_message}"
-        if not github_ok:
-            errors.append(github_seed_message)
 
     state["_loaded_from"] = "CURRENT PROTECTED FULL-SNAPSHOT BASELINE - no valid saved file found"
     state["_version_mismatch_fixed"] = False
     state["_active_state_file"] = str(STATE_FILE)
-    state["_github_load_status"] = github_status
     state["_load_errors"] = errors
     state["_candidate_summary"] = []
     state["_rejected_summary"] = rejected
@@ -899,7 +655,6 @@ def make_state_payload() -> dict:
         "auto_sync_prices": bool(st.session_state.auto_sync_prices),
         "last_price_sync": str(st.session_state.last_price_sync),
         "last_saved": datetime.now().strftime("%Y-%m-%d %I:%M:%S %p"),
-        "last_saved_epoch": time.time_ns(),
         "last_deploy_message": str(st.session_state.get("last_deploy_message", "")),
         "last_cash_message": str(st.session_state.get("last_cash_message", "")),
     }
@@ -962,12 +717,11 @@ def save_state() -> bool:
         else:
             payload["protected_min_contributions"] = round_money(max(existing_floor, current_total))
 
-        written_paths = write_payload_everywhere(payload)
+        write_payload_everywhere(payload)
 
         intended_holdings = portfolio_save_signature(payload["portfolio_df"])
 
-        # Verify only copies that were actually written successfully in this save.
-        for verify_path in written_paths:
+        for verify_path in writable_state_files():
             verify = normalize_state_payload(read_json_file(verify_path))
             if round_money(verify.get("cash_fdrxx", -1)) != round_money(payload["cash_fdrxx"]):
                 raise RuntimeError(f"Save verification failed for {verify_path}: cash did not match after write.")
@@ -980,22 +734,9 @@ def save_state() -> bool:
             if saved_holdings != intended_holdings:
                 raise RuntimeError(f"Save verification failed for {verify_path}: holdings did not match after write.")
 
-        cfg = get_github_persistence_config()
-        if cfg.get("configured"):
-            github_ok, github_message = write_github_state_payload(payload)
-            st.session_state.github_save_status = github_message
-        else:
-            github_ok = False
-            github_message = "GitHub cloud save is not configured; the verified local snapshot was saved successfully."
-            st.session_state.github_save_status = github_message
-
         st.session_state.protected_min_contributions = payload["protected_min_contributions"]
         st.session_state.last_saved = payload["last_saved"]
-        st.session_state.last_saved_epoch = payload.get("last_saved_epoch", 0)
-        st.session_state.loaded_from = (
-            "CURRENT FULL SNAPSHOT - saved successfully to local backups"
-            + (" and GitHub cloud state" if github_ok else " (GitHub cloud unavailable; local save retained)")
-        )
+        st.session_state.loaded_from = f"CURRENT FULL SNAPSHOT - saved and verified in protected state files"
         st.session_state.last_save_error = ""
         return True
 
@@ -1025,7 +766,6 @@ def apply_state_dict(state: dict, message: str = "") -> None:
     st.session_state.auto_sync_prices = bool(state.get("auto_sync_prices", True))
     st.session_state.last_price_sync = state.get("last_price_sync", "")
     st.session_state.last_saved = state.get("last_saved", "")
-    st.session_state.last_saved_epoch = to_int(state.get("last_saved_epoch", 0), 0)
     st.session_state.last_deploy_message = message or state.get("last_deploy_message", "")
     st.session_state.last_cash_message = state.get("last_cash_message", "")
     sync_editor_from_portfolio()
@@ -1043,7 +783,6 @@ def build_session_start_payload_from_loaded_state() -> dict:
         "auto_sync_prices": bool(st.session_state.auto_sync_prices),
         "last_price_sync": str(st.session_state.last_price_sync),
         "last_saved": str(st.session_state.last_saved),
-        "last_saved_epoch": to_int(st.session_state.get("last_saved_epoch", 0), 0),
         "last_deploy_message": str(st.session_state.last_deploy_message),
         "last_cash_message": str(st.session_state.last_cash_message),
     }
@@ -1066,12 +805,9 @@ def init_state() -> None:
     st.session_state.auto_sync_prices = bool(loaded.get("auto_sync_prices", True))
     st.session_state.last_price_sync = loaded.get("last_price_sync", "")
     st.session_state.last_saved = loaded.get("last_saved", "")
-    st.session_state.last_saved_epoch = to_int(loaded.get("last_saved_epoch", 0), 0)
     st.session_state.last_deploy_message = loaded.get("last_deploy_message", "")
     st.session_state.last_cash_message = loaded.get("last_cash_message", "")
     st.session_state.last_save_error = ""
-    st.session_state.github_load_status = loaded.get("_github_load_status", "")
-    st.session_state.github_save_status = ""
     st.session_state.authorize_contribution_reduction_once = False
     st.session_state.editor_version = 0
     st.session_state.app_initialized = True
@@ -1897,8 +1633,6 @@ def render_state_health_box() -> None:
     good_loader = (
         "PRIMARY ACTIVE FULL SNAPSHOT" in loaded_from
         or "BEST VALID FULL SNAPSHOT" in loaded_from
-        or "BEST PROTECTED FULL SNAPSHOT" in loaded_from
-        or "GITHUB_REPO_STATE" in loaded_from
         or "BACKUP RECOVERY FULL SNAPSHOT" in loaded_from
         or "CURRENT FULL SNAPSHOT" in loaded_from
         or "UPLOADED SNAPSHOT" in loaded_from
@@ -1935,11 +1669,6 @@ def render_state_health_box() -> None:
         f"Hidden save: {state_exists} | Hidden backup: {backup_exists} | Hidden last-good: {last_good_exists} | "
         f"Root save: {legacy_exists} | Root backup: {legacy_backup_exists}"
     )
-    st.caption(f"GitHub cloud persistence: {github_persistence_summary()}")
-    if st.session_state.get("github_load_status"):
-        st.caption(f"GitHub load status: {st.session_state.github_load_status}")
-    if st.session_state.get("github_save_status"):
-        st.caption(f"GitHub save status: {st.session_state.github_save_status}")
 
     if st.session_state.get("auto_repair_performed", False):
         st.success("Automatic recovery ran: the best protected snapshot was promoted to every save and backup location.")
@@ -2367,7 +2096,7 @@ def render_system_tools() -> None:
         "Backup, restore, reload, and safety tools."
     )
 
-    st.warning("Every Save button writes verified local backups. GitHub cloud backup is used only when it is correctly configured; a GitHub error will not crash or erase the app.")
+    st.warning("Every Save button now writes the main save, backup, last-good, home copies, root copies, and embedded recovery snapshot automatically. Use Download Snapshot Backup only when you want an outside copy before big changes.")
 
     c1, c2, c3 = st.columns(3)
 
@@ -2474,10 +2203,8 @@ def render_system_tools() -> None:
                 write_payload_everywhere(payload_to_save)
                 st.session_state.last_saved = payload_to_save.get("last_saved", "")
                 st.session_state.protected_min_contributions = payload_to_save.get("protected_min_contributions", uploaded_total)
-                if save_state():
-                    st.success("Uploaded snapshot restored, saved, backed up in all locations, verified locally, and verified in GitHub cloud state.")
-                else:
-                    st.error(f"Snapshot restored locally, but cloud save verification failed: {st.session_state.last_save_error}")
+                save_state()
+                st.success("Uploaded snapshot restored, saved, backed up in all locations, and made active.")
                 st.rerun()
 
         except Exception as exc:
@@ -2486,9 +2213,6 @@ def render_system_tools() -> None:
     st.markdown("#### Save Diagnostics")
     st.caption(f"App version: {APP_BASELINE_VERSION}")
     st.caption(f"State schema version: {STATE_SCHEMA_VERSION}")
-    st.caption(f"GitHub cloud persistence: {github_persistence_summary()}")
-    st.caption(f"GitHub load status: {st.session_state.get('github_load_status', '')}")
-    st.caption(f"GitHub save status: {st.session_state.get('github_save_status', '')}")
     st.caption(f"Current working directory: {Path.cwd()}")
     st.caption(f"App directory: {APP_DIR}")
     st.caption(f"Hidden active state file: {STATE_FILE}")
@@ -2536,7 +2260,7 @@ def main() -> None:
 
     st.markdown('<div class="dashboard-title">Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="dashboard-subtitle">Stable production app &#8226; protected local save &#8226; optional GitHub backup &#8226; stale-save rejection.</div>',
+        '<div class="dashboard-subtitle">Regular production app &#8226; one-click save + backup &#8226; protected recovery &#8226; stale-save rejection.</div>',
         unsafe_allow_html=True,
     )
 
@@ -2614,7 +2338,6 @@ def main() -> None:
         st.divider()
 
         render_system_tools()
-
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-06-28-github-cloud-persistence-v8"
+APP_BASELINE_VERSION = "2026-07-11-full-ui-resilient-save-v18"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -54,13 +54,13 @@ HOME_LAST_GOOD_FILE = HOME_STATE_DIR / "retirement_dashboard_state_last_good.jso
 # Last-resort portable snapshot. This is refreshed on Save when the app file is writable.
 EMBEDDED_SAVED_STATE_JSON = r'''{
   "state_schema_version": 2,
-  "app_baseline_version": "2026-06-15-auto-recovery-v6-extra-50000-protected",
+  "app_baseline_version": "2026-07-11-full-ui-resilient-save-v18",
   "portfolio_df": [
     {
       "ticker": "AIPI",
-      "qty": 692.808,
+      "qty": 706.966,
       "avg_cost": 34.04685,
-      "manual_price": 35.68,
+      "manual_price": 35.865,
       "target_weight": 5.0,
       "annual_yield": 0.124,
       "payout_frequency": "monthly",
@@ -69,9 +69,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "CHPY",
-      "qty": 463.05,
+      "qty": 474.719,
       "avg_cost": 56.06939,
-      "manual_price": 67.7,
+      "manual_price": 81.9401,
       "target_weight": 6.0,
       "annual_yield": 0.05,
       "payout_frequency": "monthly",
@@ -80,9 +80,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "DIVO",
-      "qty": 1317.602,
-      "avg_cost": 44.92944,
-      "manual_price": 45.13,
+      "qty": 1404.379,
+      "avg_cost": 44.979583,
+      "manual_price": 45.705,
       "target_weight": 10.0,
       "annual_yield": 0.048,
       "payout_frequency": "monthly",
@@ -91,9 +91,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "FEPI",
-      "qty": 916.088,
+      "qty": 929.65,
       "avg_cost": 39.99048,
-      "manual_price": 42.93,
+      "manual_price": 41.95,
       "target_weight": 7.0,
       "annual_yield": 0.12,
       "payout_frequency": "monthly",
@@ -102,9 +102,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "GDXY",
-      "qty": 3530.571,
+      "qty": 3619.685,
       "avg_cost": 13.10574,
-      "manual_price": 12.71,
+      "manual_price": 10.2213,
       "target_weight": 15.0,
       "annual_yield": 0.18,
       "payout_frequency": "monthly",
@@ -115,7 +115,7 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
       "ticker": "IAU",
       "qty": 174.866,
       "avg_cost": 84.63566,
-      "manual_price": 85.55,
+      "manual_price": 76.49,
       "target_weight": 4.0,
       "annual_yield": 0.0,
       "payout_frequency": "none",
@@ -124,9 +124,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "IWMI",
-      "qty": 314.353,
+      "qty": 318.115,
       "avg_cost": 48.21481,
-      "manual_price": 50.37,
+      "manual_price": 53.005,
       "target_weight": 4.0,
       "annual_yield": 0.12,
       "payout_frequency": "monthly",
@@ -135,9 +135,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "IYRI",
-      "qty": 381.608,
+      "qty": 385.111,
       "avg_cost": 46.93339,
-      "manual_price": 49.16,
+      "manual_price": 49.67,
       "target_weight": 5.0,
       "annual_yield": 0.08,
       "payout_frequency": "monthly",
@@ -146,9 +146,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "MLPI",
-      "qty": 333.107,
+      "qty": 337.131,
       "avg_cost": 56.78753,
-      "manual_price": 56.38,
+      "manual_price": 55.99,
       "target_weight": 4.0,
       "annual_yield": 0.08,
       "payout_frequency": "quarterly",
@@ -157,9 +157,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "QQQI",
-      "qty": 719.369,
+      "qty": 727.773,
       "avg_cost": 50.46252,
-      "manual_price": 53.86,
+      "manual_price": 55.05,
       "target_weight": 10.0,
       "annual_yield": 0.14,
       "payout_frequency": "monthly",
@@ -168,9 +168,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "SPYI",
-      "qty": 1262.507,
-      "avg_cost": 49.48005,
-      "manual_price": 52.14,
+      "qty": 1370.585,
+      "avg_cost": 49.669172,
+      "manual_price": 52.19,
       "target_weight": 12.0,
       "annual_yield": 0.12,
       "payout_frequency": "monthly",
@@ -179,9 +179,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "SVOL",
-      "qty": 1596.886,
-      "avg_cost": 15.49701,
-      "manual_price": 15.91,
+      "qty": 1721.341,
+      "avg_cost": 15.515646,
+      "manual_price": 15.7,
       "target_weight": 6.0,
       "annual_yield": 0.16,
       "payout_frequency": "monthly",
@@ -190,9 +190,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
     },
     {
       "ticker": "TLTW",
-      "qty": 976.835,
-      "avg_cost": 22.28491,
-      "manual_price": 22.3,
+      "qty": 1031.331,
+      "avg_cost": 22.295132,
+      "manual_price": 22.515,
       "target_weight": 7.0,
       "annual_yield": 0.12,
       "payout_frequency": "monthly",
@@ -200,20 +200,20 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
       "notes": ""
     }
   ],
-  "cash_fdrxx": 143912.21,
-  "total_contributions": 486299.07,
-  "protected_min_contributions": 486299.07,
+  "cash_fdrxx": 207923.13,
+  "total_contributions": 561299.07,
+  "protected_min_contributions": 561299.07,
   "use_live_prices": true,
   "auto_sync_prices": true,
-  "last_price_sync": "",
-  "last_saved": "2026-06-15 11:59:59 AM",
-  "last_deploy_message": "Auto-recovery baseline includes the extra $50,000 in FDRXX.",
-  "last_cash_message": "FDRXX cash baseline: $143,912.21 after extra $50,000 add."
+  "last_price_sync": "2026-06-26 07:46:00 PM",
+  "last_saved": "2026-07-11 08:30:00 PM",
+  "last_deploy_message": "Updated full-feature baseline with verified July holdings and cash.",
+  "last_cash_message": "FDRXX cash baseline: $207,923.13. The $3,112.29 test amount is intentionally excluded."
 }'''
 
-DEFAULT_CASH_FDRXX = 143912.21
-DEFAULT_TOTAL_CONTRIBUTIONS = 486299.07
-CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS = 486299.07
+DEFAULT_CASH_FDRXX = 207923.13
+DEFAULT_TOTAL_CONTRIBUTIONS = 561299.07
+CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS = 561299.07
 
 DEFAULT_COLUMNS = [
     "ticker", "qty", "avg_cost", "manual_price", "target_weight",
@@ -221,19 +221,19 @@ DEFAULT_COLUMNS = [
 ]
 
 DEFAULT_ROWS = [
-    ["AIPI", 692.808, 34.04685, 35.68, 5.0, 0.124, "monthly", "all", ""],
-    ["CHPY", 463.050, 56.06939, 67.70, 6.0, 0.050, "monthly", "all", ""],
-    ["DIVO", 1317.602, 44.92944, 45.13, 10.0, 0.048, "monthly", "all", ""],
-    ["FEPI", 916.088, 39.99048, 42.93, 7.0, 0.120, "monthly", "all", ""],
-    ["GDXY", 3530.571, 13.10574, 12.71, 15.0, 0.180, "monthly", "all", ""],
-    ["IAU", 174.866, 84.63566, 85.55, 4.0, 0.000, "none", "none", ""],
-    ["IWMI", 314.353, 48.21481, 50.37, 4.0, 0.120, "monthly", "all", ""],
-    ["IYRI", 381.608, 46.93339, 49.16, 5.0, 0.080, "monthly", "all", ""],
-    ["MLPI", 333.107, 56.78753, 56.38, 4.0, 0.080, "quarterly", "3,6,9,12", ""],
-    ["QQQI", 719.369, 50.46252, 53.86, 10.0, 0.140, "monthly", "all", ""],
-    ["SPYI", 1262.507, 49.48005, 52.14, 12.0, 0.120, "monthly", "all", ""],
-    ["SVOL", 1596.886, 15.49701, 15.91, 6.0, 0.160, "monthly", "all", ""],
-    ["TLTW", 976.835, 22.28491, 22.30, 7.0, 0.120, "monthly", "all", ""],
+    ['AIPI', 706.966, 34.04685, 35.865, 5.0, 0.124, 'monthly', 'all', ''],
+    ['CHPY', 474.719, 56.06939, 81.9401, 6.0, 0.05, 'monthly', 'all', ''],
+    ['DIVO', 1404.379, 44.979583, 45.705, 10.0, 0.048, 'monthly', 'all', ''],
+    ['FEPI', 929.65, 39.99048, 41.95, 7.0, 0.12, 'monthly', 'all', ''],
+    ['GDXY', 3619.685, 13.10574, 10.2213, 15.0, 0.18, 'monthly', 'all', ''],
+    ['IAU', 174.866, 84.63566, 76.49, 4.0, 0.0, 'none', 'none', ''],
+    ['IWMI', 318.115, 48.21481, 53.005, 4.0, 0.12, 'monthly', 'all', ''],
+    ['IYRI', 385.111, 46.93339, 49.67, 5.0, 0.08, 'monthly', 'all', ''],
+    ['MLPI', 337.131, 56.78753, 55.99, 4.0, 0.08, 'quarterly', '3,6,9,12', ''],
+    ['QQQI', 727.773, 50.46252, 55.05, 10.0, 0.14, 'monthly', 'all', ''],
+    ['SPYI', 1370.585, 49.669172, 52.19, 12.0, 0.12, 'monthly', 'all', ''],
+    ['SVOL', 1721.341, 15.515646, 15.7, 6.0, 0.16, 'monthly', 'all', ''],
+    ['TLTW', 1031.331, 22.295132, 22.515, 7.0, 0.12, 'monthly', 'all', ''],
 ]
 
 SMART_INCOME_TIERS = {
@@ -918,12 +918,16 @@ def save_state() -> bool:
 
         github_ok, github_message = write_github_state_payload(payload)
         st.session_state.github_save_status = github_message
-        if not github_ok:
-            raise RuntimeError(github_message)
+        # Local, home-folder, and legacy JSON copies were already written and verified.
+        # A temporary GitHub/API/token problem must not make the app lose the save
+        # or terminate the callback. The status remains visible for troubleshooting.
 
         st.session_state.protected_min_contributions = payload["protected_min_contributions"]
         st.session_state.last_saved = payload["last_saved"]
-        st.session_state.loaded_from = "CURRENT FULL SNAPSHOT - saved successfully to local backups and GitHub cloud state"
+        st.session_state.loaded_from = (
+            "CURRENT FULL SNAPSHOT - saved and verified locally"
+            + (" and in GitHub cloud state" if github_ok else "; GitHub cloud save unavailable")
+        )
         st.session_state.last_save_error = ""
         return True
 
@@ -2054,7 +2058,10 @@ def render_top_controls(calc: dict) -> None:
 
     if set_cash_pressed:
         set_exact_cash(float(exact_cash))
-        st.success("Exact FDRXX cash saved.")
+        if st.session_state.get("last_save_error"):
+            st.error(f"Could not save exact cash: {st.session_state.last_save_error}")
+        else:
+            st.success("Exact FDRXX cash saved.")
         st.rerun()
 
     if st.session_state.get("last_cash_message"):

@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,7 +21,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-07-11-full-ui-resilient-save-v18"
+APP_BASELINE_VERSION = "2026-07-12-github-readback-safe-startup-v19"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -511,6 +512,27 @@ def read_github_state_payload() -> tuple[dict, str]:
         return {}, f"GitHub load failed: {exc}"
 
 
+def payload_matches_expected(actual: dict, expected: dict) -> tuple[bool, str]:
+    """Verify every durable money field and the complete holdings table."""
+    try:
+        actual_norm = normalize_state_payload(actual)
+        expected_norm = normalize_state_payload(expected)
+
+        for field in ("cash_fdrxx", "total_contributions", "protected_min_contributions"):
+            if round_money(actual_norm.get(field, -1)) != round_money(expected_norm.get(field, -1)):
+                return False, f"{field} did not match"
+
+        if portfolio_save_signature(actual_norm.get("portfolio_df", [])) != portfolio_save_signature(expected_norm.get("portfolio_df", [])):
+            return False, "holdings did not match"
+
+        if str(actual_norm.get("last_saved", "")) != str(expected_norm.get("last_saved", "")):
+            return False, "save timestamp did not match"
+
+        return True, "verified"
+    except Exception as exc:
+        return False, f"verification could not be completed: {exc}"
+
+
 def write_github_state_payload(payload: dict) -> tuple[bool, str]:
     cfg = get_github_persistence_config()
     if not cfg["configured"]:
@@ -531,7 +553,23 @@ def write_github_state_payload(payload: dict) -> tuple[bool, str]:
             body["sha"] = sha
 
         github_api_json(cfg, "PUT", github_contents_url(cfg, include_ref=False), body=body)
-        return True, f"GitHub cloud save verified: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+
+        # A successful PUT is not enough. Read the durable file back and verify
+        # the exact money fields, timestamp, and holdings before reporting success.
+        last_reason = "GitHub read-back did not return the saved state"
+        for delay in (0.0, 0.5, 1.0):
+            if delay:
+                time.sleep(delay)
+            readback, read_status = read_github_state_payload()
+            if readback:
+                matched, reason = payload_matches_expected(readback, clean_payload)
+                if matched:
+                    return True, f"GitHub cloud save read back and verified: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+                last_reason = reason
+            else:
+                last_reason = read_status
+
+        return False, f"GitHub accepted the save but durable read-back verification failed: {last_reason}"
     except Exception as exc:
         return False, f"GitHub cloud save failed: {exc}"
 
@@ -801,8 +839,12 @@ def load_state() -> dict:
     state = baseline_state_payload()
     payload = make_payload_from_state(state, force_timestamp=True)
 
-    # First-run only: no saved state exists, so create the initial protected baseline.
-    write_payload_everywhere(payload)
+    # First-run only: no saved state exists. A read-only or temporary filesystem
+    # must not take down the entire app; GitHub can still become the durable source.
+    try:
+        write_payload_everywhere(payload)
+    except Exception as exc:
+        errors.append(f"Initial local baseline write failed: {exc}")
 
     state["_loaded_from"] = "CURRENT PROTECTED FULL-SNAPSHOT BASELINE - no valid saved file found"
     state["_version_mismatch_fixed"] = False
@@ -918,16 +960,18 @@ def save_state() -> bool:
 
         github_ok, github_message = write_github_state_payload(payload)
         st.session_state.github_save_status = github_message
-        # Local, home-folder, and legacy JSON copies were already written and verified.
-        # A temporary GitHub/API/token problem must not make the app lose the save
-        # or terminate the callback. The status remains visible for troubleshooting.
+
+        # Streamlit Cloud's local filesystem is temporary. Never call the save
+        # successful unless the durable GitHub copy was read back and matched.
+        if not github_ok:
+            raise RuntimeError(
+                "The temporary local copies were written, but the permanent GitHub save was not verified. "
+                + github_message
+            )
 
         st.session_state.protected_min_contributions = payload["protected_min_contributions"]
         st.session_state.last_saved = payload["last_saved"]
-        st.session_state.loaded_from = (
-            "CURRENT FULL SNAPSHOT - saved and verified locally"
-            + (" and in GitHub cloud state" if github_ok else "; GitHub cloud save unavailable")
-        )
+        st.session_state.loaded_from = "CURRENT FULL SNAPSHOT - saved locally and read back from verified GitHub cloud state"
         st.session_state.last_save_error = ""
         return True
 
@@ -2547,4 +2591,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        st.error("The dashboard stopped safely instead of entering a blank crash screen.")
+        st.exception(exc)

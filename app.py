@@ -21,7 +21,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-07-12-isolated-state-branch-save-v20"
+APP_BASELINE_VERSION = "2026-07-12-isolated-state-branch-save-v21"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -503,27 +503,56 @@ def github_get_file_metadata(cfg: dict) -> dict | None:
 
 
 def ensure_github_state_branch(cfg: dict) -> None:
-    """Create the isolated state branch once, based on the deployment branch."""
-    branch_ref_url = (
-        f"https://api.github.com/repos/{cfg['repo']}/git/ref/heads/"
-        + urllib.parse.quote(cfg["branch"], safe="")
+    """Create the isolated state branch once without requiring a ref GET.
+
+    Fine-grained GitHub tokens can return a misleading 404 for the ref lookup
+    even though they can read commits and create refs. The contents endpoint is
+    therefore used to determine whether the state branch already exists.
+    """
+    # If the branch already exists, a contents request against its root works.
+    root_url = (
+        f"https://api.github.com/repos/{cfg['repo']}/contents"
+        + "?ref=" + urllib.parse.quote(cfg["branch"], safe="")
     )
     try:
-        github_api_json(cfg, "GET", branch_ref_url)
+        github_api_json(cfg, "GET", root_url)
         return
     except RuntimeError as exc:
         if "HTTP 404" not in str(exc):
             raise
 
-    source_ref_url = (
-        f"https://api.github.com/repos/{cfg['repo']}/git/ref/heads/"
-        + urllib.parse.quote(cfg["deployment_branch"], safe="")
-    )
-    source_ref = github_api_json(cfg, "GET", source_ref_url)
-    source_sha = str(source_ref.get("object", {}).get("sha", "")).strip()
+    # Resolve the deployment branch through the commits endpoint. This works
+    # with the same Contents permission already required by the dashboard.
+    candidate_branches = []
+    for candidate in (cfg.get("deployment_branch", ""), "main", "master"):
+        candidate = str(candidate).strip()
+        if candidate and candidate not in candidate_branches:
+            candidate_branches.append(candidate)
+
+    source_sha = ""
+    source_branch = ""
+    last_error = ""
+    for candidate in candidate_branches:
+        commit_url = (
+            f"https://api.github.com/repos/{cfg['repo']}/commits/"
+            + urllib.parse.quote(candidate, safe="")
+        )
+        try:
+            commit = github_api_json(cfg, "GET", commit_url)
+            source_sha = str(commit.get("sha", "")).strip()
+            if source_sha:
+                source_branch = candidate
+                break
+        except RuntimeError as exc:
+            last_error = str(exc)
+            if "HTTP 404" not in last_error:
+                raise
+
     if not source_sha:
         raise RuntimeError(
-            f"Could not identify deployment branch {cfg['deployment_branch']} to create the state branch."
+            "Could not identify the repository deployment branch from "
+            + ", ".join(candidate_branches)
+            + (f". Last GitHub response: {last_error}" if last_error else ".")
         )
 
     create_ref_url = f"https://api.github.com/repos/{cfg['repo']}/git/refs"
@@ -535,9 +564,11 @@ def ensure_github_state_branch(cfg: dict) -> None:
             body={"ref": f"refs/heads/{cfg['branch']}", "sha": source_sha},
         )
     except RuntimeError as exc:
-        # A simultaneous app run may have created it after our initial check.
+        # HTTP 422 means it was created by another run between our checks.
         if "HTTP 422" not in str(exc):
-            raise
+            raise RuntimeError(
+                f"Could not create isolated state branch {cfg['branch']} from {source_branch}: {exc}"
+            ) from exc
 
 
 def read_github_state_payload() -> tuple[dict, str]:

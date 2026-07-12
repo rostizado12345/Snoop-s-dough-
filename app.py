@@ -21,7 +21,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-07-12-dedicated-state-branch-save-v20"
+APP_BASELINE_VERSION = "2026-07-12-isolated-state-branch-save-v20"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -41,9 +41,10 @@ LEGACY_STATE_FILE = APP_DIR / "retirement_dashboard_state.json"
 LEGACY_BACKUP_FILE = APP_DIR / "retirement_dashboard_state_backup.json"
 LEGACY_LAST_GOOD_FILE = APP_DIR / "retirement_dashboard_state_last_good.json"
 
-# Cloud save file inside GitHub. This is the durable Streamlit Cloud copy.
-# GITHUB_BRANCH is the Streamlit deployment/source branch. State is deliberately
-# written to a separate branch so a Save does not redeploy/restart the running app.
+# Durable cloud state is stored on a branch separate from the Streamlit
+# deployment branch. Committing state into the deployment branch can trigger a
+# redeploy in the middle of a Save and leave the app blank.
+# Existing secrets GITHUB_TOKEN / GITHUB_REPO continue to work unchanged.
 GITHUB_STATE_DEFAULT_PATH = "retirement_dashboard_state.json"
 GITHUB_STATE_DEFAULT_BRANCH = "dashboard-state"
 
@@ -426,19 +427,22 @@ def get_streamlit_secret(name: str, default: str = "") -> str:
 def get_github_persistence_config() -> dict:
     token = get_streamlit_secret("GITHUB_TOKEN")
     repo = get_streamlit_secret("GITHUB_REPO")
-    source_branch = get_streamlit_secret("GITHUB_BRANCH", "main")
-    state_branch = get_streamlit_secret("GITHUB_STATE_BRANCH", GITHUB_STATE_DEFAULT_BRANCH)
+    deployment_branch = get_streamlit_secret("GITHUB_BRANCH", "main")
+    branch = get_streamlit_secret("GITHUB_STATE_BRANCH", GITHUB_STATE_DEFAULT_BRANCH)
     state_path = get_streamlit_secret("GITHUB_STATE_PATH", GITHUB_STATE_DEFAULT_PATH)
 
-    configured = bool(token and repo and "/" in repo and source_branch and state_branch and state_path)
+    # Never write dashboard data into the branch Streamlit deploys from. Even if
+    # an old secret points both names at the same branch, force the safe branch.
+    if branch == deployment_branch:
+        branch = GITHUB_STATE_DEFAULT_BRANCH
+
+    configured = bool(token and repo and "/" in repo and branch and state_path)
     return {
         "configured": configured,
         "token": token,
         "repo": repo,
-        "source_branch": source_branch,
-        "state_branch": state_branch,
-        # Keep branch as the state branch for the existing helper functions.
-        "branch": state_branch,
+        "branch": branch,
+        "deployment_branch": deployment_branch,
         "state_path": state_path,
     }
 
@@ -447,7 +451,7 @@ def github_persistence_summary() -> str:
     cfg = get_github_persistence_config()
     if not cfg["configured"]:
         return "not configured"
-    return f"configured: {cfg['repo']} / {cfg['state_path']} @ {cfg['state_branch']} (deployment branch: {cfg['source_branch']})"
+    return f"configured: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
 
 
 def github_contents_url(cfg: dict, include_ref: bool = False) -> str:
@@ -489,34 +493,6 @@ def github_api_json(cfg: dict, method: str, url: str, body: dict | None = None) 
         raise RuntimeError(f"GitHub API {method} failed with HTTP {exc.code}: {detail}") from exc
 
 
-
-
-def github_ref_url(cfg: dict, branch: str) -> str:
-    encoded_branch = urllib.parse.quote(branch, safe="")
-    return f"https://api.github.com/repos/{cfg['repo']}/git/ref/heads/{encoded_branch}"
-
-
-def ensure_github_state_branch(cfg: dict) -> None:
-    """Create the dedicated state branch once, without touching the deploy branch."""
-    try:
-        github_api_json(cfg, "GET", github_ref_url(cfg, cfg["state_branch"]))
-        return
-    except RuntimeError as exc:
-        if "HTTP 404" not in str(exc):
-            raise
-
-    source_ref = github_api_json(cfg, "GET", github_ref_url(cfg, cfg["source_branch"]))
-    source_sha = str(source_ref.get("object", {}).get("sha", "")).strip()
-    if not source_sha:
-        raise RuntimeError(f"Could not determine source branch SHA for {cfg['source_branch']}")
-
-    github_api_json(
-        cfg,
-        "POST",
-        f"https://api.github.com/repos/{cfg['repo']}/git/refs",
-        body={"ref": f"refs/heads/{cfg['state_branch']}", "sha": source_sha},
-    )
-
 def github_get_file_metadata(cfg: dict) -> dict | None:
     try:
         return github_api_json(cfg, "GET", github_contents_url(cfg, include_ref=True))
@@ -526,12 +502,51 @@ def github_get_file_metadata(cfg: dict) -> dict | None:
         raise
 
 
+def ensure_github_state_branch(cfg: dict) -> None:
+    """Create the isolated state branch once, based on the deployment branch."""
+    branch_ref_url = (
+        f"https://api.github.com/repos/{cfg['repo']}/git/ref/heads/"
+        + urllib.parse.quote(cfg["branch"], safe="")
+    )
+    try:
+        github_api_json(cfg, "GET", branch_ref_url)
+        return
+    except RuntimeError as exc:
+        if "HTTP 404" not in str(exc):
+            raise
+
+    source_ref_url = (
+        f"https://api.github.com/repos/{cfg['repo']}/git/ref/heads/"
+        + urllib.parse.quote(cfg["deployment_branch"], safe="")
+    )
+    source_ref = github_api_json(cfg, "GET", source_ref_url)
+    source_sha = str(source_ref.get("object", {}).get("sha", "")).strip()
+    if not source_sha:
+        raise RuntimeError(
+            f"Could not identify deployment branch {cfg['deployment_branch']} to create the state branch."
+        )
+
+    create_ref_url = f"https://api.github.com/repos/{cfg['repo']}/git/refs"
+    try:
+        github_api_json(
+            cfg,
+            "POST",
+            create_ref_url,
+            body={"ref": f"refs/heads/{cfg['branch']}", "sha": source_sha},
+        )
+    except RuntimeError as exc:
+        # A simultaneous app run may have created it after our initial check.
+        if "HTTP 422" not in str(exc):
+            raise
+
+
 def read_github_state_payload() -> tuple[dict, str]:
     cfg = get_github_persistence_config()
     if not cfg["configured"]:
         return {}, "GitHub persistence not configured"
 
     try:
+        ensure_github_state_branch(cfg)
         meta = github_get_file_metadata(cfg)
         if not meta:
             return {}, f"No GitHub state file yet at {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
@@ -696,23 +711,13 @@ def is_candidate_valid(item: dict) -> bool:
 
 
 def write_payload_everywhere(payload: dict) -> None:
-    write_json_atomic(STATE_FILE, payload)
-    write_json_atomic(BACKUP_FILE, payload)
-    write_json_atomic(LAST_GOOD_FILE, payload)
-
+    # Keep all runtime writes outside APP_DIR. Streamlit watches the deployed app
+    # tree, and changing JSON files there can restart the script during its Save
+    # callback just like changing app.py. HOME copies are safe for immediate local
+    # read-back; the isolated GitHub branch is the durable cloud copy.
     write_json_atomic(HOME_STATE_FILE, payload)
     write_json_atomic(HOME_BACKUP_FILE, payload)
     write_json_atomic(HOME_LAST_GOOD_FILE, payload)
-
-    write_json_atomic(LEGACY_STATE_FILE, payload)
-    write_json_atomic(LEGACY_BACKUP_FILE, payload)
-    write_json_atomic(LEGACY_LAST_GOOD_FILE, payload)
-
-    # Do not rewrite the running Streamlit source file during Save. On Streamlit
-    # Cloud, modifying __file__ can trigger a source reload/redeploy in the middle
-    # of the save callback and leave the page blank. The embedded snapshot remains
-    # available as a read-only recovery baseline; durable saves continue to use
-    # the verified JSON copies above and the GitHub cloud state below.
 
 
 def load_state() -> dict:
@@ -980,7 +985,7 @@ def save_state() -> bool:
 
         intended_holdings = portfolio_save_signature(payload["portfolio_df"])
 
-        for verify_path in candidate_state_files():
+        for verify_path in (HOME_STATE_FILE, HOME_BACKUP_FILE, HOME_LAST_GOOD_FILE):
             verify = normalize_state_payload(read_json_file(verify_path))
             if round_money(verify.get("cash_fdrxx", -1)) != round_money(payload["cash_fdrxx"]):
                 raise RuntimeError(f"Save verification failed for {verify_path}: cash did not match after write.")

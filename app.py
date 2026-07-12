@@ -21,7 +21,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-07-12-isolated-state-branch-save-v21"
+APP_BASELINE_VERSION = "2026-07-12-configured-branch-safe-save-v22"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -41,12 +41,8 @@ LEGACY_STATE_FILE = APP_DIR / "retirement_dashboard_state.json"
 LEGACY_BACKUP_FILE = APP_DIR / "retirement_dashboard_state_backup.json"
 LEGACY_LAST_GOOD_FILE = APP_DIR / "retirement_dashboard_state_last_good.json"
 
-# Durable cloud state is stored on a branch separate from the Streamlit
-# deployment branch. Committing state into the deployment branch can trigger a
-# redeploy in the middle of a Save and leave the app blank.
-# Existing secrets GITHUB_TOKEN / GITHUB_REPO continue to work unchanged.
+# Durable cloud state uses the repository branch already configured in Streamlit Secrets.
 GITHUB_STATE_DEFAULT_PATH = "retirement_dashboard_state.json"
-GITHUB_STATE_DEFAULT_BRANCH = "dashboard-state"
 
 # Home-folder copies survive app filename changes, Downloads-folder copies, and most local reruns.
 HOME_STATE_DIR = Path.home() / ".retirement_dashboard_state"
@@ -204,9 +200,9 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
       "notes": ""
     }
   ],
-  "cash_fdrxx": 207923.13,
-  "total_contributions": 561299.07,
-  "protected_min_contributions": 561299.07,
+  "cash_fdrxx": 299160.66,
+  "total_contributions": 652536.60,
+  "protected_min_contributions": 652536.60,
   "use_live_prices": true,
   "auto_sync_prices": true,
   "last_price_sync": "2026-06-26 07:46:00 PM",
@@ -427,14 +423,8 @@ def get_streamlit_secret(name: str, default: str = "") -> str:
 def get_github_persistence_config() -> dict:
     token = get_streamlit_secret("GITHUB_TOKEN")
     repo = get_streamlit_secret("GITHUB_REPO")
-    deployment_branch = get_streamlit_secret("GITHUB_BRANCH", "main")
-    branch = get_streamlit_secret("GITHUB_STATE_BRANCH", GITHUB_STATE_DEFAULT_BRANCH)
+    branch = get_streamlit_secret("GITHUB_BRANCH", "main")
     state_path = get_streamlit_secret("GITHUB_STATE_PATH", GITHUB_STATE_DEFAULT_PATH)
-
-    # Never write dashboard data into the branch Streamlit deploys from. Even if
-    # an old secret points both names at the same branch, force the safe branch.
-    if branch == deployment_branch:
-        branch = GITHUB_STATE_DEFAULT_BRANCH
 
     configured = bool(token and repo and "/" in repo and branch and state_path)
     return {
@@ -442,7 +432,6 @@ def get_github_persistence_config() -> dict:
         "token": token,
         "repo": repo,
         "branch": branch,
-        "deployment_branch": deployment_branch,
         "state_path": state_path,
     }
 
@@ -502,82 +491,12 @@ def github_get_file_metadata(cfg: dict) -> dict | None:
         raise
 
 
-def ensure_github_state_branch(cfg: dict) -> None:
-    """Create the isolated state branch once without requiring a ref GET.
-
-    Fine-grained GitHub tokens can return a misleading 404 for the ref lookup
-    even though they can read commits and create refs. The contents endpoint is
-    therefore used to determine whether the state branch already exists.
-    """
-    # If the branch already exists, a contents request against its root works.
-    root_url = (
-        f"https://api.github.com/repos/{cfg['repo']}/contents"
-        + "?ref=" + urllib.parse.quote(cfg["branch"], safe="")
-    )
-    try:
-        github_api_json(cfg, "GET", root_url)
-        return
-    except RuntimeError as exc:
-        if "HTTP 404" not in str(exc):
-            raise
-
-    # Resolve the deployment branch through the commits endpoint. This works
-    # with the same Contents permission already required by the dashboard.
-    candidate_branches = []
-    for candidate in (cfg.get("deployment_branch", ""), "main", "master"):
-        candidate = str(candidate).strip()
-        if candidate and candidate not in candidate_branches:
-            candidate_branches.append(candidate)
-
-    source_sha = ""
-    source_branch = ""
-    last_error = ""
-    for candidate in candidate_branches:
-        commit_url = (
-            f"https://api.github.com/repos/{cfg['repo']}/commits/"
-            + urllib.parse.quote(candidate, safe="")
-        )
-        try:
-            commit = github_api_json(cfg, "GET", commit_url)
-            source_sha = str(commit.get("sha", "")).strip()
-            if source_sha:
-                source_branch = candidate
-                break
-        except RuntimeError as exc:
-            last_error = str(exc)
-            if "HTTP 404" not in last_error:
-                raise
-
-    if not source_sha:
-        raise RuntimeError(
-            "Could not identify the repository deployment branch from "
-            + ", ".join(candidate_branches)
-            + (f". Last GitHub response: {last_error}" if last_error else ".")
-        )
-
-    create_ref_url = f"https://api.github.com/repos/{cfg['repo']}/git/refs"
-    try:
-        github_api_json(
-            cfg,
-            "POST",
-            create_ref_url,
-            body={"ref": f"refs/heads/{cfg['branch']}", "sha": source_sha},
-        )
-    except RuntimeError as exc:
-        # HTTP 422 means it was created by another run between our checks.
-        if "HTTP 422" not in str(exc):
-            raise RuntimeError(
-                f"Could not create isolated state branch {cfg['branch']} from {source_branch}: {exc}"
-            ) from exc
-
-
 def read_github_state_payload() -> tuple[dict, str]:
     cfg = get_github_persistence_config()
     if not cfg["configured"]:
         return {}, "GitHub persistence not configured"
 
     try:
-        ensure_github_state_branch(cfg)
         meta = github_get_file_metadata(cfg)
         if not meta:
             return {}, f"No GitHub state file yet at {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
@@ -619,7 +538,6 @@ def write_github_state_payload(payload: dict) -> tuple[bool, str]:
         return False, "GitHub persistence not configured. Add GITHUB_TOKEN, GITHUB_REPO, and GITHUB_BRANCH in Streamlit Secrets."
 
     try:
-        ensure_github_state_branch(cfg)
         meta = github_get_file_metadata(cfg)
         sha = meta.get("sha") if meta else None
 

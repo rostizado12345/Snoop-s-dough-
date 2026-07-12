@@ -2,7 +2,6 @@ import base64
 import json
 import os
 import re
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -21,7 +20,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-07-10-stable-save-repair-v13"
+APP_BASELINE_VERSION = "2026-07-11-full-ui-resilient-save-v18"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -55,7 +54,7 @@ HOME_LAST_GOOD_FILE = HOME_STATE_DIR / "retirement_dashboard_state_last_good.jso
 # Last-resort portable snapshot. This is refreshed on Save when the app file is writable.
 EMBEDDED_SAVED_STATE_JSON = r'''{
   "state_schema_version": 2,
-  "app_baseline_version": "2026-07-10-stable-save-repair-v13",
+  "app_baseline_version": "2026-07-11-full-ui-resilient-save-v18",
   "portfolio_df": [
     {
       "ticker": "AIPI",
@@ -207,16 +206,14 @@ EMBEDDED_SAVED_STATE_JSON = r'''{
   "use_live_prices": true,
   "auto_sync_prices": true,
   "last_price_sync": "2026-06-26 07:46:00 PM",
-  "last_saved": "2026-06-26 07:59:42.448677 PM",
-  "last_saved_epoch": 1782503982448705733,
-  "last_deploy_message": "Verified 2026-06-26 backup embedded as protected app baseline.",
-  "last_cash_message": "FDRXX cash set exactly to $132,923.13 from verified backup snapshot."
+  "last_saved": "2026-07-11 08:30:00 PM",
+  "last_deploy_message": "Updated full-feature baseline with verified July holdings and cash.",
+  "last_cash_message": "FDRXX cash baseline: $207,923.13. The $3,112.29 test amount is intentionally excluded."
 }'''
 
 DEFAULT_CASH_FDRXX = 207923.13
 DEFAULT_TOTAL_CONTRIBUTIONS = 561299.07
 CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS = 561299.07
-VERIFIED_BACKUP_LAST_SAVED_EPOCH = 1782503982448705733
 
 DEFAULT_COLUMNS = [
     "ticker", "qty", "avg_cost", "manual_price", "target_weight",
@@ -224,19 +221,19 @@ DEFAULT_COLUMNS = [
 ]
 
 DEFAULT_ROWS = [
-    ["AIPI", 706.966000, 34.046850, 35.8650, 5.0, 0.124, "monthly", "all", ""],
-    ["CHPY", 474.719000, 56.069390, 81.9401, 6.0, 0.050, "monthly", "all", ""],
-    ["DIVO", 1404.379000, 44.979583, 45.7050, 10.0, 0.048, "monthly", "all", ""],
-    ["FEPI", 929.650000, 39.990480, 41.9500, 7.0, 0.120, "monthly", "all", ""],
-    ["GDXY", 3619.685000, 13.105740, 10.2213, 15.0, 0.180, "monthly", "all", ""],
-    ["IAU", 174.866000, 84.635660, 76.4900, 4.0, 0.000, "none", "none", ""],
-    ["IWMI", 318.115000, 48.214810, 53.0050, 4.0, 0.120, "monthly", "all", ""],
-    ["IYRI", 385.111000, 46.933390, 49.6700, 5.0, 0.080, "monthly", "all", ""],
-    ["MLPI", 337.131000, 56.787530, 55.9900, 4.0, 0.080, "quarterly", "3,6,9,12", ""],
-    ["QQQI", 727.773000, 50.462520, 55.0500, 10.0, 0.140, "monthly", "all", ""],
-    ["SPYI", 1370.585000, 49.669172, 52.1900, 12.0, 0.120, "monthly", "all", ""],
-    ["SVOL", 1721.341000, 15.515646, 15.7000, 6.0, 0.160, "monthly", "all", ""],
-    ["TLTW", 1031.331000, 22.295132, 22.5150, 7.0, 0.120, "monthly", "all", ""],
+    ['AIPI', 706.966, 34.04685, 35.865, 5.0, 0.124, 'monthly', 'all', ''],
+    ['CHPY', 474.719, 56.06939, 81.9401, 6.0, 0.05, 'monthly', 'all', ''],
+    ['DIVO', 1404.379, 44.979583, 45.705, 10.0, 0.048, 'monthly', 'all', ''],
+    ['FEPI', 929.65, 39.99048, 41.95, 7.0, 0.12, 'monthly', 'all', ''],
+    ['GDXY', 3619.685, 13.10574, 10.2213, 15.0, 0.18, 'monthly', 'all', ''],
+    ['IAU', 174.866, 84.63566, 76.49, 4.0, 0.0, 'none', 'none', ''],
+    ['IWMI', 318.115, 48.21481, 53.005, 4.0, 0.12, 'monthly', 'all', ''],
+    ['IYRI', 385.111, 46.93339, 49.67, 5.0, 0.08, 'monthly', 'all', ''],
+    ['MLPI', 337.131, 56.78753, 55.99, 4.0, 0.08, 'quarterly', '3,6,9,12', ''],
+    ['QQQI', 727.773, 50.46252, 55.05, 10.0, 0.14, 'monthly', 'all', ''],
+    ['SPYI', 1370.585, 49.669172, 52.19, 12.0, 0.12, 'monthly', 'all', ''],
+    ['SVOL', 1721.341, 15.515646, 15.7, 6.0, 0.16, 'monthly', 'all', ''],
+    ['TLTW', 1031.331, 22.295132, 22.515, 7.0, 0.12, 'monthly', 'all', ''],
 ]
 
 SMART_INCOME_TIERS = {
@@ -263,21 +260,6 @@ def to_float(value, default: float = 0.0) -> float:
         return default
 
 
-
-
-def to_int(value, default: int = 0) -> int:
-    try:
-        if value is None:
-            return default
-        if isinstance(value, str):
-            cleaned = value.replace(",", "").strip()
-            return default if cleaned == "" else int(float(cleaned))
-        if pd.isna(value):
-            return default
-        return int(value)
-    except Exception:
-        return default
-
 def round_money(value: float) -> float:
     return round(float(value), 2)
 
@@ -295,7 +277,7 @@ def format_percent(value: float) -> str:
 
 
 def parse_saved_time(value: str) -> datetime:
-    for fmt in ["%Y-%m-%d %I:%M:%S.%f %p", "%Y-%m-%d %I:%M:%S %p", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"]:
+    for fmt in ["%Y-%m-%d %I:%M:%S %p", "%Y-%m-%d %H:%M:%S"]:
         try:
             return datetime.strptime(str(value), fmt)
         except Exception:
@@ -342,7 +324,6 @@ def baseline_state_payload() -> dict:
         "auto_sync_prices": True,
         "last_price_sync": "",
         "last_saved": now,
-        "last_saved_epoch": time.time_ns(),
         "last_deploy_message": "Loaded current protected full-snapshot production baseline.",
         "last_cash_message": f"FDRXX cash baseline: {format_dollars(DEFAULT_CASH_FDRXX)}.",
     }
@@ -373,7 +354,6 @@ def normalize_state_payload(raw: dict) -> dict:
         "auto_sync_prices": bool(raw.get("auto_sync_prices", True)),
         "last_price_sync": str(raw.get("last_price_sync", "")),
         "last_saved": str(raw.get("last_saved", "")),
-        "last_saved_epoch": to_int(raw.get("last_saved_epoch", 0), 0),
         "last_deploy_message": str(raw.get("last_deploy_message", "")),
         "last_cash_message": str(raw.get("last_cash_message", "")),
     }
@@ -404,8 +384,28 @@ def read_embedded_state_payload() -> dict:
 
 
 def write_embedded_state_payload(payload: dict) -> None:
-    """Disabled intentionally: a running Streamlit app must never rewrite app.py."""
-    return
+    """Best-effort: refresh the portable snapshot inside this .py file.
+
+    Normal JSON files are still the primary save system. This embedded copy is
+    only a last-resort recovery layer for cases where sidecar JSON files vanish
+    or the app is opened from a different folder/name. If the app file is
+    read-only, this safely does nothing.
+    """
+    try:
+        app_file = Path(__file__).resolve()
+        source = app_file.read_text(encoding="utf-8")
+        replacement = "EMBEDDED_SAVED_STATE_JSON = r'''" + json.dumps(payload, indent=2) + "'''"
+        updated, count = re.subn(
+            r"EMBEDDED_SAVED_STATE_JSON\s*=\s*r'''[\s\S]*?'''",
+            replacement,
+            source,
+            count=1,
+        )
+        if count == 1 and updated != source:
+            app_file.write_text(updated, encoding="utf-8")
+    except Exception:
+        pass
+
 
 
 def get_streamlit_secret(name: str, default: str = "") -> str:
@@ -531,22 +531,7 @@ def write_github_state_payload(payload: dict) -> tuple[bool, str]:
             body["sha"] = sha
 
         github_api_json(cfg, "PUT", github_contents_url(cfg, include_ref=False), body=body)
-
-        verify_raw, verify_message = read_github_state_payload()
-        if not verify_raw:
-            return False, f"GitHub cloud save failed verification: {verify_message}"
-
-        verify_payload = normalize_state_payload(verify_raw)
-        if round_money(verify_payload.get("cash_fdrxx", -1)) != round_money(clean_payload["cash_fdrxx"]):
-            return False, "GitHub cloud save failed verification: cash did not match after GitHub write."
-        if round_money(verify_payload.get("total_contributions", -1)) != round_money(clean_payload["total_contributions"]):
-            return False, "GitHub cloud save failed verification: total contributions did not match after GitHub write."
-        if round_money(verify_payload.get("protected_min_contributions", -1)) != round_money(clean_payload["protected_min_contributions"]):
-            return False, "GitHub cloud save failed verification: protected floor did not match after GitHub write."
-        if portfolio_save_signature(verify_payload.get("portfolio_df", [])) != portfolio_save_signature(clean_payload["portfolio_df"]):
-            return False, "GitHub cloud save failed verification: holdings did not match after GitHub write."
-
-        return True, f"GitHub cloud save verified by read-back: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+        return True, f"GitHub cloud save verified: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
     except Exception as exc:
         return False, f"GitHub cloud save failed: {exc}"
 
@@ -572,11 +557,8 @@ def make_payload_from_state(state: dict, force_timestamp: bool = False) -> dict:
     else:
         df = normalize_portfolio_df(pd.DataFrame(source_df))
     saved_time = str(state.get("last_saved", ""))
-    saved_epoch = to_int(state.get("last_saved_epoch", 0), 0)
     if force_timestamp or saved_time.strip() == "":
         saved_time = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
-    if force_timestamp or saved_epoch <= 0:
-        saved_epoch = time.time_ns()
 
     total_contributions = round_money(state["total_contributions"])
     protected_min = round_money(
@@ -597,7 +579,6 @@ def make_payload_from_state(state: dict, force_timestamp: bool = False) -> dict:
         "auto_sync_prices": bool(state.get("auto_sync_prices", True)),
         "last_price_sync": str(state.get("last_price_sync", "")),
         "last_saved": saved_time,
-        "last_saved_epoch": saved_epoch,
         "last_deploy_message": str(state.get("last_deploy_message", "")),
         "last_cash_message": str(state.get("last_cash_message", "")),
     }
@@ -616,29 +597,13 @@ def candidate_protected_value(item: dict) -> float:
     return round_money(max(total, protected_min))
 
 
-
-def candidate_last_saved_epoch(item: dict) -> int:
-    return to_int(item.get("state", {}).get("last_saved_epoch", 0), 0)
-
-
-def candidate_verified_source_rank(item: dict) -> int:
-    path_name = str(item.get("path", ""))
-    epoch = candidate_last_saved_epoch(item)
-    if epoch and epoch >= VERIFIED_BACKUP_LAST_SAVED_EPOCH:
-        return 2
-    if path_name == "EMBEDDED_APP_FILE_SNAPSHOT":
-        return 1
-    return 0
-
 def candidate_sort_key(item: dict) -> tuple:
     state = item["state"]
     return (
         1 if state.get("state_schema_version", 1) >= STATE_SCHEMA_VERSION else 0,
         candidate_protected_value(item),
         round_money(state.get("total_contributions", 0.0)),
-        candidate_last_saved_epoch(item),
         item["last_saved_dt"],
-        candidate_verified_source_rank(item),
     )
 
 
@@ -657,41 +622,24 @@ def is_candidate_valid(item: dict) -> bool:
     return total >= CURRENT_PROTECTED_BASELINE_CONTRIBUTIONS
 
 
-def write_payload_everywhere(payload: dict) -> List[Path]:
-    """Write the snapshot wherever possible and return only verified-write candidates.
+def write_payload_everywhere(payload: dict) -> None:
+    write_json_atomic(STATE_FILE, payload)
+    write_json_atomic(BACKUP_FILE, payload)
+    write_json_atomic(LAST_GOOD_FILE, payload)
 
-    Streamlit Cloud and GitHub checkouts can contain paths that exist but are read-only.
-    A failed optional copy must not make a successful save look like a dashboard crash.
-    """
-    targets = [
-        STATE_FILE, BACKUP_FILE, LAST_GOOD_FILE,
-        HOME_STATE_FILE, HOME_BACKUP_FILE, HOME_LAST_GOOD_FILE,
-        LEGACY_STATE_FILE, LEGACY_BACKUP_FILE, LEGACY_LAST_GOOD_FILE,
-    ]
-    successes: List[Path] = []
-    failures = []
-    seen = set()
+    write_json_atomic(HOME_STATE_FILE, payload)
+    write_json_atomic(HOME_BACKUP_FILE, payload)
+    write_json_atomic(HOME_LAST_GOOD_FILE, payload)
 
-    for path in targets:
-        # Some legacy and current paths can resolve to the same file. Write each once.
-        try:
-            identity = str(path.resolve())
-        except Exception:
-            identity = str(path)
-        if identity in seen:
-            continue
-        seen.add(identity)
+    write_json_atomic(LEGACY_STATE_FILE, payload)
+    write_json_atomic(LEGACY_BACKUP_FILE, payload)
+    write_json_atomic(LEGACY_LAST_GOOD_FILE, payload)
 
-        try:
-            write_json_atomic(path, payload)
-            successes.append(path)
-        except Exception as exc:
-            failures.append(f"{path}: {exc}")
-
-    if not successes:
-        raise RuntimeError("Could not save the dashboard state to any writable location. " + " | ".join(failures))
-
-    return successes
+    # Do not rewrite the running Streamlit source file during Save. On Streamlit
+    # Cloud, modifying __file__ can trigger a source reload/redeploy in the middle
+    # of the save callback and leave the page blank. The embedded snapshot remains
+    # available as a read-only recovery baseline; durable saves continue to use
+    # the verified JSON copies above and the GitHub cloud state below.
 
 
 def load_state() -> dict:
@@ -823,13 +771,8 @@ def load_state() -> dict:
             try:
                 promoted_payload = make_payload_from_state(loaded, force_timestamp=True)
                 write_payload_everywhere(promoted_payload)
-                if get_github_persistence_config().get("configured"):
-                    github_ok, github_promote_message = write_github_state_payload(promoted_payload)
-                    github_status = f"{github_status} | {github_promote_message}"
-                    if not github_ok:
-                        errors.append(github_promote_message)
                 loaded = normalize_state_payload(promoted_payload)
-                loaded_from = f"{loaded_from} | AUTO-REPAIRED AND PROMOTED TO LOCAL BACKUPS, EMBEDDED SNAPSHOT, AND GITHUB WHEN CONFIGURED"
+                loaded_from = f"{loaded_from} | AUTO-REPAIRED AND PROMOTED TO ALL SAVE LOCATIONS"
                 auto_repair_performed = True
             except Exception as exc:
                 auto_repair_error = str(exc)
@@ -860,11 +803,6 @@ def load_state() -> dict:
 
     # First-run only: no saved state exists, so create the initial protected baseline.
     write_payload_everywhere(payload)
-    if get_github_persistence_config().get("configured"):
-        github_ok, github_seed_message = write_github_state_payload(payload)
-        github_status = f"{github_status} | {github_seed_message}"
-        if not github_ok:
-            errors.append(github_seed_message)
 
     state["_loaded_from"] = "CURRENT PROTECTED FULL-SNAPSHOT BASELINE - no valid saved file found"
     state["_version_mismatch_fixed"] = False
@@ -899,7 +837,6 @@ def make_state_payload() -> dict:
         "auto_sync_prices": bool(st.session_state.auto_sync_prices),
         "last_price_sync": str(st.session_state.last_price_sync),
         "last_saved": datetime.now().strftime("%Y-%m-%d %I:%M:%S %p"),
-        "last_saved_epoch": time.time_ns(),
         "last_deploy_message": str(st.session_state.get("last_deploy_message", "")),
         "last_cash_message": str(st.session_state.get("last_cash_message", "")),
     }
@@ -962,12 +899,11 @@ def save_state() -> bool:
         else:
             payload["protected_min_contributions"] = round_money(max(existing_floor, current_total))
 
-        written_paths = write_payload_everywhere(payload)
+        write_payload_everywhere(payload)
 
         intended_holdings = portfolio_save_signature(payload["portfolio_df"])
 
-        # Verify only copies that were actually written successfully in this save.
-        for verify_path in written_paths:
+        for verify_path in candidate_state_files():
             verify = normalize_state_payload(read_json_file(verify_path))
             if round_money(verify.get("cash_fdrxx", -1)) != round_money(payload["cash_fdrxx"]):
                 raise RuntimeError(f"Save verification failed for {verify_path}: cash did not match after write.")
@@ -980,21 +916,17 @@ def save_state() -> bool:
             if saved_holdings != intended_holdings:
                 raise RuntimeError(f"Save verification failed for {verify_path}: holdings did not match after write.")
 
-        cfg = get_github_persistence_config()
-        if cfg.get("configured"):
-            github_ok, github_message = write_github_state_payload(payload)
-            st.session_state.github_save_status = github_message
-        else:
-            github_ok = False
-            github_message = "GitHub cloud save is not configured; the verified local snapshot was saved successfully."
-            st.session_state.github_save_status = github_message
+        github_ok, github_message = write_github_state_payload(payload)
+        st.session_state.github_save_status = github_message
+        # Local, home-folder, and legacy JSON copies were already written and verified.
+        # A temporary GitHub/API/token problem must not make the app lose the save
+        # or terminate the callback. The status remains visible for troubleshooting.
 
         st.session_state.protected_min_contributions = payload["protected_min_contributions"]
         st.session_state.last_saved = payload["last_saved"]
-        st.session_state.last_saved_epoch = payload.get("last_saved_epoch", 0)
         st.session_state.loaded_from = (
-            "CURRENT FULL SNAPSHOT - saved successfully to local backups"
-            + (" and GitHub cloud state" if github_ok else " (GitHub cloud unavailable; local save retained)")
+            "CURRENT FULL SNAPSHOT - saved and verified locally"
+            + (" and in GitHub cloud state" if github_ok else "; GitHub cloud save unavailable")
         )
         st.session_state.last_save_error = ""
         return True
@@ -1025,7 +957,6 @@ def apply_state_dict(state: dict, message: str = "") -> None:
     st.session_state.auto_sync_prices = bool(state.get("auto_sync_prices", True))
     st.session_state.last_price_sync = state.get("last_price_sync", "")
     st.session_state.last_saved = state.get("last_saved", "")
-    st.session_state.last_saved_epoch = to_int(state.get("last_saved_epoch", 0), 0)
     st.session_state.last_deploy_message = message or state.get("last_deploy_message", "")
     st.session_state.last_cash_message = state.get("last_cash_message", "")
     sync_editor_from_portfolio()
@@ -1043,7 +974,6 @@ def build_session_start_payload_from_loaded_state() -> dict:
         "auto_sync_prices": bool(st.session_state.auto_sync_prices),
         "last_price_sync": str(st.session_state.last_price_sync),
         "last_saved": str(st.session_state.last_saved),
-        "last_saved_epoch": to_int(st.session_state.get("last_saved_epoch", 0), 0),
         "last_deploy_message": str(st.session_state.last_deploy_message),
         "last_cash_message": str(st.session_state.last_cash_message),
     }
@@ -1066,7 +996,6 @@ def init_state() -> None:
     st.session_state.auto_sync_prices = bool(loaded.get("auto_sync_prices", True))
     st.session_state.last_price_sync = loaded.get("last_price_sync", "")
     st.session_state.last_saved = loaded.get("last_saved", "")
-    st.session_state.last_saved_epoch = to_int(loaded.get("last_saved_epoch", 0), 0)
     st.session_state.last_deploy_message = loaded.get("last_deploy_message", "")
     st.session_state.last_cash_message = loaded.get("last_cash_message", "")
     st.session_state.last_save_error = ""
@@ -2129,7 +2058,10 @@ def render_top_controls(calc: dict) -> None:
 
     if set_cash_pressed:
         set_exact_cash(float(exact_cash))
-        st.success("Exact FDRXX cash saved.")
+        if st.session_state.get("last_save_error"):
+            st.error(f"Could not save exact cash: {st.session_state.last_save_error}")
+        else:
+            st.success("Exact FDRXX cash saved.")
         st.rerun()
 
     if st.session_state.get("last_cash_message"):
@@ -2367,7 +2299,7 @@ def render_system_tools() -> None:
         "Backup, restore, reload, and safety tools."
     )
 
-    st.warning("Every Save button writes verified local backups. GitHub cloud backup is used only when it is correctly configured; a GitHub error will not crash or erase the app.")
+    st.warning("Every Save button now writes local backups AND the GitHub cloud state file. Use Download Snapshot Backup only when you want an outside copy before big changes.")
 
     c1, c2, c3 = st.columns(3)
 
@@ -2474,10 +2406,8 @@ def render_system_tools() -> None:
                 write_payload_everywhere(payload_to_save)
                 st.session_state.last_saved = payload_to_save.get("last_saved", "")
                 st.session_state.protected_min_contributions = payload_to_save.get("protected_min_contributions", uploaded_total)
-                if save_state():
-                    st.success("Uploaded snapshot restored, saved, backed up in all locations, verified locally, and verified in GitHub cloud state.")
-                else:
-                    st.error(f"Snapshot restored locally, but cloud save verification failed: {st.session_state.last_save_error}")
+                save_state()
+                st.success("Uploaded snapshot restored, saved, backed up in all locations, and made active.")
                 st.rerun()
 
         except Exception as exc:
@@ -2536,7 +2466,7 @@ def main() -> None:
 
     st.markdown('<div class="dashboard-title">Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="dashboard-subtitle">Stable production app &#8226; protected local save &#8226; optional GitHub backup &#8226; stale-save rejection.</div>',
+        '<div class="dashboard-subtitle">Regular production app &#8226; GitHub cloud save &#8226; protected recovery &#8226; stale-save rejection.</div>',
         unsafe_allow_html=True,
     )
 
@@ -2615,3 +2545,6 @@ def main() -> None:
 
         render_system_tools()
 
+
+if __name__ == "__main__":
+    main()

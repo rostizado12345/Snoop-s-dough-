@@ -537,6 +537,8 @@ def durable_payload_signature(payload: dict) -> dict:
         "use_live_prices": bool(normalized.get("use_live_prices", True)),
         "auto_sync_prices": bool(normalized.get("auto_sync_prices", True)),
         "last_price_sync": str(normalized.get("last_price_sync", "")),
+        "last_deploy_message": str(normalized.get("last_deploy_message", "")),
+        "last_cash_message": str(normalized.get("last_cash_message", "")),
     }
 
 
@@ -982,16 +984,6 @@ def save_state() -> bool:
     try:
         payload = make_state_payload()
 
-        # A form submit can update display-only status text even when the user
-        # changed no portfolio value. Compare only durable dashboard values and
-        # return before ANY disk or GitHub operation when they are unchanged.
-        session_start_payload = st.session_state.get("session_start_payload")
-        if session_start_payload:
-            if durable_payload_signature(payload) == durable_payload_signature(session_start_payload):
-                st.session_state.github_save_status = "No dashboard values changed; no save operation was needed."
-                st.session_state.last_save_error = ""
-                return True
-
         existing_floor = get_existing_protected_floor()
         current_total = round_money(payload["total_contributions"])
         authorized_reduction = bool(st.session_state.get("authorize_contribution_reduction_once", False))
@@ -1042,8 +1034,6 @@ def save_state() -> bool:
         st.session_state.last_saved = payload["last_saved"]
         st.session_state.loaded_from = "CURRENT FULL SNAPSHOT - saved locally and read back from verified GitHub cloud state"
         st.session_state.last_save_error = ""
-        # Future Save clicks compare against the snapshot that just succeeded.
-        st.session_state.session_start_payload = make_payload_from_state(payload, force_timestamp=False)
         return True
 
     except Exception as exc:
@@ -2302,19 +2292,27 @@ def render_holdings_editor() -> None:
 
     if save_holdings_pressed:
         cleaned = normalize_portfolio_df(edited_df)
+        current = normalize_portfolio_df(st.session_state.portfolio_df)
+
+        # A no-change click must not write files, contact GitHub, or rerun the app.
+        # Compare only the actual holdings dataânot timestamps or status messages.
+        if portfolio_save_signature(cleaned) == portfolio_save_signature(current):
+            st.info("No holdings changes detected. Nothing was saved.")
+            return
+
         st.session_state.portfolio_df = cleaned.copy()
         st.session_state.editor_df = cleaned.copy()
         st.session_state.last_deploy_message = "Holdings table saved from latest visible editor values."
 
         ok = save_state()
-        sync_editor_from_portfolio()
 
         if ok:
             st.success("Holdings saved and verified in the full protected snapshot.")
         else:
             st.error(f"Could not save holdings. Error: {st.session_state.last_save_error}")
 
-        st.rerun()
+        # Do not force an immediate rerun from inside the form callback. The next
+        # normal Streamlit interaction will refresh the display safely.
 
 
 def render_breakdowns(calc: dict) -> None:

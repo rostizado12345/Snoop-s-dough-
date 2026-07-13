@@ -21,7 +21,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-07-12-dedicated-state-branch-save-v23"
+APP_BASELINE_VERSION = "2026-07-12-save-readback-rerun-repair-v23"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -43,7 +43,6 @@ LEGACY_LAST_GOOD_FILE = APP_DIR / "retirement_dashboard_state_last_good.json"
 
 # Durable cloud state uses the repository branch already configured in Streamlit Secrets.
 GITHUB_STATE_DEFAULT_PATH = "retirement_dashboard_state.json"
-GITHUB_STATE_DEFAULT_BRANCH = "retirement-dashboard-state"
 
 # Home-folder copies survive app filename changes, Downloads-folder copies, and most local reruns.
 HOME_STATE_DIR = Path.home() / ".retirement_dashboard_state"
@@ -424,13 +423,7 @@ def get_streamlit_secret(name: str, default: str = "") -> str:
 def get_github_persistence_config() -> dict:
     token = get_streamlit_secret("GITHUB_TOKEN")
     repo = get_streamlit_secret("GITHUB_REPO")
-
-    # State commits must never land on the branch Streamlit deploys. A commit on
-    # the deployment branch restarts the app in the middle of the Save callback,
-    # which is the source of the blank/contact-support behavior. Keep app code and
-    # mutable dashboard data on separate branches. GITHUB_STATE_BRANCH is optional;
-    # the app creates and uses the dedicated branch below automatically.
-    branch = get_streamlit_secret("GITHUB_STATE_BRANCH", GITHUB_STATE_DEFAULT_BRANCH)
+    branch = get_streamlit_secret("GITHUB_BRANCH", "main")
     state_path = get_streamlit_secret("GITHUB_STATE_PATH", GITHUB_STATE_DEFAULT_PATH)
 
     configured = bool(token and repo and "/" in repo and branch and state_path)
@@ -443,49 +436,6 @@ def get_github_persistence_config() -> dict:
     }
 
 
-def ensure_github_state_branch(cfg: dict) -> tuple[bool, str]:
-    """Ensure the isolated data branch exists without touching the deploy branch."""
-    if not cfg.get("configured"):
-        return False, "GitHub persistence not configured"
-
-    try:
-        repo_url = f"https://api.github.com/repos/{cfg['repo']}"
-        repo_meta = github_api_json(cfg, "GET", repo_url)
-        default_branch = str(repo_meta.get("default_branch", "main")).strip() or "main"
-
-        # Even if someone accidentally names the default/deploy branch in Secrets,
-        # force state writes onto the isolated branch instead.
-        if cfg["branch"] == default_branch:
-            cfg["branch"] = GITHUB_STATE_DEFAULT_BRANCH
-
-        encoded_branch = urllib.parse.quote(cfg["branch"], safe="")
-        ref_url = f"https://api.github.com/repos/{cfg['repo']}/git/ref/heads/{encoded_branch}"
-        try:
-            github_api_json(cfg, "GET", ref_url)
-            return True, f"Dedicated GitHub state branch ready: {cfg['branch']}"
-        except RuntimeError as exc:
-            if "HTTP 404" not in str(exc):
-                raise
-
-        encoded_default = urllib.parse.quote(default_branch, safe="")
-        base_ref_url = f"https://api.github.com/repos/{cfg['repo']}/git/ref/heads/{encoded_default}"
-        base_ref = github_api_json(cfg, "GET", base_ref_url)
-        base_sha = str(base_ref.get("object", {}).get("sha", "")).strip()
-        if not base_sha:
-            return False, f"Could not determine the starting commit for {default_branch}"
-
-        create_ref_url = f"https://api.github.com/repos/{cfg['repo']}/git/refs"
-        github_api_json(
-            cfg,
-            "POST",
-            create_ref_url,
-            body={"ref": f"refs/heads/{cfg['branch']}", "sha": base_sha},
-        )
-        return True, f"Created dedicated GitHub state branch: {cfg['branch']}"
-    except Exception as exc:
-        return False, f"Could not prepare dedicated GitHub state branch: {exc}"
-
-
 def github_persistence_summary() -> str:
     cfg = get_github_persistence_config()
     if not cfg["configured"]:
@@ -493,11 +443,16 @@ def github_persistence_summary() -> str:
     return f"configured: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
 
 
-def github_contents_url(cfg: dict, include_ref: bool = False) -> str:
+def github_contents_url(cfg: dict, include_ref: bool = False, cache_bust: bool = False) -> str:
     encoded_path = urllib.parse.quote(cfg["state_path"], safe="/")
     url = f"https://api.github.com/repos/{cfg['repo']}/contents/{encoded_path}"
+    params = []
     if include_ref:
-        url += "?ref=" + urllib.parse.quote(cfg["branch"], safe="")
+        params.append("ref=" + urllib.parse.quote(cfg["branch"], safe=""))
+    if cache_bust:
+        params.append("_=" + str(time.time_ns()))
+    if params:
+        url += "?" + "&".join(params)
     return url
 
 
@@ -516,6 +471,8 @@ def github_api_json(cfg: dict, method: str, url: str, body: dict | None = None) 
             "X-GitHub-Api-Version": "2022-11-28",
             "Content-Type": "application/json",
             "User-Agent": "retirement-dashboard-streamlit",
+            "Cache-Control": "no-cache, no-store, max-age=0",
+            "Pragma": "no-cache",
         },
     )
 
@@ -534,7 +491,7 @@ def github_api_json(cfg: dict, method: str, url: str, body: dict | None = None) 
 
 def github_get_file_metadata(cfg: dict) -> dict | None:
     try:
-        return github_api_json(cfg, "GET", github_contents_url(cfg, include_ref=True))
+        return github_api_json(cfg, "GET", github_contents_url(cfg, include_ref=True, cache_bust=True))
     except RuntimeError as exc:
         if "HTTP 404" in str(exc):
             return None
@@ -547,10 +504,6 @@ def read_github_state_payload() -> tuple[dict, str]:
         return {}, "GitHub persistence not configured"
 
     try:
-        branch_ok, branch_status = ensure_github_state_branch(cfg)
-        if not branch_ok:
-            return {}, branch_status
-
         meta = github_get_file_metadata(cfg)
         if not meta:
             return {}, f"No GitHub state file yet at {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
@@ -589,13 +542,9 @@ def payload_matches_expected(actual: dict, expected: dict) -> tuple[bool, str]:
 def write_github_state_payload(payload: dict) -> tuple[bool, str]:
     cfg = get_github_persistence_config()
     if not cfg["configured"]:
-        return False, "GitHub persistence not configured. Add GITHUB_TOKEN and GITHUB_REPO in Streamlit Secrets."
+        return False, "GitHub persistence not configured. Add GITHUB_TOKEN, GITHUB_REPO, and GITHUB_BRANCH in Streamlit Secrets."
 
     try:
-        branch_ok, branch_status = ensure_github_state_branch(cfg)
-        if not branch_ok:
-            return False, branch_status
-
         meta = github_get_file_metadata(cfg)
         sha = meta.get("sha") if meta else None
 
@@ -1287,10 +1236,10 @@ def add_new_money(amount: float) -> None:
         max(st.session_state.protected_min_contributions, st.session_state.total_contributions)
     )
     st.session_state.last_cash_message = f"Added new money: {format_dollars(amount)} to FDRXX."
-    save_state()
+    return save_state()
 
 
-def set_exact_cash(new_cash: float) -> None:
+def set_exact_cash(new_cash: float) -> bool:
     old_cash = round_money(st.session_state.cash_fdrxx)
     new_cash = round_money(new_cash)
     difference = round_money(new_cash - old_cash)
@@ -1300,7 +1249,7 @@ def set_exact_cash(new_cash: float) -> None:
         f"FDRXX cash set exactly to {format_dollars(new_cash)}. "
         f"Adjustment: {format_dollars(difference)}."
     )
-    save_state()
+    return save_state()
 
 
 def deploy_cash_to_position(ticker: str, dollars: float, calc_df: pd.DataFrame) -> None:
@@ -2148,12 +2097,12 @@ def render_top_controls(calc: dict) -> None:
         set_cash_pressed = st.form_submit_button("Set Exact FDRXX Cash", use_container_width=True)
 
     if set_cash_pressed:
-        set_exact_cash(float(exact_cash))
-        if st.session_state.get("last_save_error"):
+        saved_ok = set_exact_cash(float(exact_cash))
+        if not saved_ok:
             st.error(f"Could not save exact cash: {st.session_state.last_save_error}")
         else:
             st.success("Exact FDRXX cash saved.")
-        st.rerun()
+            st.rerun()
 
     if st.session_state.get("last_cash_message"):
         st.info(st.session_state.last_cash_message)
@@ -2190,9 +2139,9 @@ def render_top_controls(calc: dict) -> None:
 
         if save_state():
             st.success("Total contributions saved.")
+            st.rerun()
         else:
             st.error(f"Could not save: {st.session_state.last_save_error}")
-        st.rerun()
 
     st.markdown("#### Add New Money to FDRXX")
     cols = st.columns(5)
@@ -2641,4 +2590,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as exc:
-        st.error("The dashboard stopped safely instead of enterin
+        st.error("The dashboard stopped safely instead of entering a blank crash screen.")
+        st.exception(exc)

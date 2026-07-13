@@ -21,7 +21,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-07-12-current-save-verification-repair-v23"
+APP_BASELINE_VERSION = "2026-07-12-exact-commit-verification-v23"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -420,50 +420,11 @@ def get_streamlit_secret(name: str, default: str = "") -> str:
     return str(value).strip()
 
 
-def safe_github_state_path(requested_path: str) -> tuple[str, str]:
-    """Return a dedicated JSON path that can never overwrite application code.
-
-    A GitHub Contents API PUT replaces the file at the configured path. If a
-    secret accidentally points at app.py (or another code/config file), sending
-    the JSON state there makes the deployed app fail with a Python/JSON syntax
-    error. The dashboard state is therefore restricted to a standalone .json
-    file and falls back to the known-safe default whenever the configured value
-    is unsafe.
-    """
-    raw = str(requested_path or "").strip().replace("\\", "/")
-    normalized = raw.lstrip("/")
-    basename = Path(normalized).name.lower() if normalized else ""
-
-    unsafe_names = {
-        Path(__file__).name.lower(),
-        "app.py",
-        "streamlit_app.py",
-        "requirements.txt",
-        "packages.txt",
-        "secrets.toml",
-        "config.toml",
-    }
-    unsafe = (
-        not normalized
-        or normalized.startswith("../")
-        or "/../" in f"/{normalized}"
-        or basename in unsafe_names
-        or not basename.endswith(".json")
-    )
-
-    if unsafe:
-        detail = raw or "(blank)"
-        return GITHUB_STATE_DEFAULT_PATH, f"Unsafe GITHUB_STATE_PATH {detail!r} was replaced with {GITHUB_STATE_DEFAULT_PATH!r}."
-
-    return normalized, ""
-
-
 def get_github_persistence_config() -> dict:
     token = get_streamlit_secret("GITHUB_TOKEN")
     repo = get_streamlit_secret("GITHUB_REPO")
     branch = get_streamlit_secret("GITHUB_BRANCH", "main")
-    requested_state_path = get_streamlit_secret("GITHUB_STATE_PATH", GITHUB_STATE_DEFAULT_PATH)
-    state_path, path_warning = safe_github_state_path(requested_state_path)
+    state_path = get_streamlit_secret("GITHUB_STATE_PATH", GITHUB_STATE_DEFAULT_PATH)
 
     configured = bool(token and repo and "/" in repo and branch and state_path)
     return {
@@ -472,7 +433,6 @@ def get_github_persistence_config() -> dict:
         "repo": repo,
         "branch": branch,
         "state_path": state_path,
-        "path_warning": path_warning,
     }
 
 
@@ -480,17 +440,15 @@ def github_persistence_summary() -> str:
     cfg = get_github_persistence_config()
     if not cfg["configured"]:
         return "not configured"
-    summary = f"configured: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
-    if cfg.get("path_warning"):
-        summary += f" | {cfg['path_warning']}"
-    return summary
+    return f"configured: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
 
 
-def github_contents_url(cfg: dict, include_ref: bool = False) -> str:
+def github_contents_url(cfg: dict, include_ref: bool = False, ref_override: str = "") -> str:
     encoded_path = urllib.parse.quote(cfg["state_path"], safe="/")
     url = f"https://api.github.com/repos/{cfg['repo']}/contents/{encoded_path}"
     if include_ref:
-        url += "?ref=" + urllib.parse.quote(cfg["branch"], safe="")
+        ref_value = str(ref_override or cfg["branch"]).strip()
+        url += "?ref=" + urllib.parse.quote(ref_value, safe="")
     return url
 
 
@@ -525,24 +483,29 @@ def github_api_json(cfg: dict, method: str, url: str, body: dict | None = None) 
         raise RuntimeError(f"GitHub API {method} failed with HTTP {exc.code}: {detail}") from exc
 
 
-def github_get_file_metadata(cfg: dict) -> dict | None:
+def github_get_file_metadata(cfg: dict, ref_override: str = "") -> dict | None:
     try:
-        return github_api_json(cfg, "GET", github_contents_url(cfg, include_ref=True))
+        return github_api_json(
+            cfg,
+            "GET",
+            github_contents_url(cfg, include_ref=True, ref_override=ref_override),
+        )
     except RuntimeError as exc:
         if "HTTP 404" in str(exc):
             return None
         raise
 
 
-def read_github_state_payload() -> tuple[dict, str]:
+def read_github_state_payload(ref_override: str = "") -> tuple[dict, str]:
     cfg = get_github_persistence_config()
     if not cfg["configured"]:
         return {}, "GitHub persistence not configured"
 
     try:
-        meta = github_get_file_metadata(cfg)
+        meta = github_get_file_metadata(cfg, ref_override=ref_override)
         if not meta:
-            return {}, f"No GitHub state file yet at {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+            ref_label = ref_override or cfg["branch"]
+            return {}, f"No GitHub state file yet at {cfg['repo']} / {cfg['state_path']} @ {ref_label}"
 
         encoded = str(meta.get("content", "")).replace("\n", "")
         if not encoded:
@@ -594,15 +557,19 @@ def write_github_state_payload(payload: dict) -> tuple[bool, str]:
         if sha:
             body["sha"] = sha
 
-        github_api_json(cfg, "PUT", github_contents_url(cfg, include_ref=False), body=body)
+        put_result = github_api_json(cfg, "PUT", github_contents_url(cfg, include_ref=False), body=body)
+        commit_sha = str((put_result.get("commit") or {}).get("sha", "")).strip()
+        if not commit_sha:
+            return False, "GitHub accepted the save but did not return the commit SHA needed for exact verification"
 
-        # A successful PUT is not enough. Read the durable file back and verify
-        # the exact money fields, timestamp, and holdings before reporting success.
+        # Verify the exact immutable commit GitHub returned, not the moving branch
+        # reference. This prevents a brief stale branch read from falsely reporting
+        # that a successful save failed.
         last_reason = "GitHub read-back did not return the saved state"
         for delay in (0.0, 0.5, 1.0):
             if delay:
                 time.sleep(delay)
-            readback, read_status = read_github_state_payload()
+            readback, read_status = read_github_state_payload(ref_override=commit_sha)
             if readback:
                 matched, reason = payload_matches_expected(readback, clean_payload)
                 if matched:

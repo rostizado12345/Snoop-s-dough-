@@ -537,8 +537,6 @@ def durable_payload_signature(payload: dict) -> dict:
         "use_live_prices": bool(normalized.get("use_live_prices", True)),
         "auto_sync_prices": bool(normalized.get("auto_sync_prices", True)),
         "last_price_sync": str(normalized.get("last_price_sync", "")),
-        "last_deploy_message": str(normalized.get("last_deploy_message", "")),
-        "last_cash_message": str(normalized.get("last_cash_message", "")),
     }
 
 
@@ -984,6 +982,16 @@ def save_state() -> bool:
     try:
         payload = make_state_payload()
 
+        # A form submit can update display-only status text even when the user
+        # changed no portfolio value. Compare only durable dashboard values and
+        # return before ANY disk or GitHub operation when they are unchanged.
+        session_start_payload = st.session_state.get("session_start_payload")
+        if session_start_payload:
+            if durable_payload_signature(payload) == durable_payload_signature(session_start_payload):
+                st.session_state.github_save_status = "No dashboard values changed; no save operation was needed."
+                st.session_state.last_save_error = ""
+                return True
+
         existing_floor = get_existing_protected_floor()
         current_total = round_money(payload["total_contributions"])
         authorized_reduction = bool(st.session_state.get("authorize_contribution_reduction_once", False))
@@ -1034,6 +1042,8 @@ def save_state() -> bool:
         st.session_state.last_saved = payload["last_saved"]
         st.session_state.loaded_from = "CURRENT FULL SNAPSHOT - saved locally and read back from verified GitHub cloud state"
         st.session_state.last_save_error = ""
+        # Future Save clicks compare against the snapshot that just succeeded.
+        st.session_state.session_start_payload = make_payload_from_state(payload, force_timestamp=False)
         return True
 
     except Exception as exc:

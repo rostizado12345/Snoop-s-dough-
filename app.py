@@ -21,7 +21,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-07-13-zero-persistence-save-test-v24"
+APP_BASELINE_VERSION = "2026-07-13-editor-outside-form-v24"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -2268,34 +2268,46 @@ def render_holdings_editor() -> None:
 
     editor_key = f"portfolio_editor_v{st.session_state.get('editor_version', 0)}"
 
-    with st.form(f"holdings_editor_form_v{st.session_state.get('editor_version', 0)}"):
-        edited_df = st.data_editor(
-            st.session_state.editor_df,
-            num_rows="dynamic",
-            use_container_width=True,
-            hide_index=True,
-            key=editor_key,
-            column_config={
-                "ticker": st.column_config.TextColumn("Ticker"),
-                "qty": st.column_config.NumberColumn("Qty / Shares", format="%.6f"),
-                "avg_cost": st.column_config.NumberColumn("Avg Cost", format="$%.6f"),
-                "manual_price": st.column_config.NumberColumn("Manual / Fallback Price", format="$%.4f"),
-                "target_weight": st.column_config.NumberColumn("Target Weight %", format="%.2f"),
-                "annual_yield": st.column_config.NumberColumn("Annual Yield", format="%.4f"),
-                "payout_frequency": st.column_config.TextColumn("Payout Frequency"),
-                "payout_months": st.column_config.TextColumn("Payout Months"),
-                "notes": st.column_config.TextColumn("Notes"),
-            },
-        )
+    # Keep the data editor out of a Streamlit form. Submitting a form that
+    # contains a dynamic data editor can fail before the Python callback runs.
+    edited_df = st.data_editor(
+        st.session_state.editor_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        key=editor_key,
+        column_config={
+            "ticker": st.column_config.TextColumn("Ticker"),
+            "qty": st.column_config.NumberColumn("Qty / Shares", format="%.6f"),
+            "avg_cost": st.column_config.NumberColumn("Avg Cost", format="$%.6f"),
+            "manual_price": st.column_config.NumberColumn("Manual / Fallback Price", format="$%.4f"),
+            "target_weight": st.column_config.NumberColumn("Target Weight %", format="%.2f"),
+            "annual_yield": st.column_config.NumberColumn("Annual Yield", format="%.4f"),
+            "payout_frequency": st.column_config.TextColumn("Payout Frequency"),
+            "payout_months": st.column_config.TextColumn("Payout Months"),
+            "notes": st.column_config.TextColumn("Notes"),
+        },
+    )
 
-        save_holdings_pressed = st.form_submit_button("Save Holdings Changes", use_container_width=True)
+    save_holdings_pressed = st.button(
+        "Save Holdings Changes",
+        use_container_width=True,
+        key=f"save_holdings_button_v{st.session_state.get('editor_version', 0)}",
+    )
 
     if save_holdings_pressed:
-        # Diagnostic isolation test:
-        # Do not alter holdings, write local files, contact GitHub, or rerun.
-        # This determines whether the failure comes from form submission itself
-        # or from the persistence path that normally follows it.
-        st.info("Save button test completed. No data was written or changed.")
+        cleaned = normalize_portfolio_df(edited_df)
+        st.session_state.portfolio_df = cleaned.copy()
+        st.session_state.editor_df = cleaned.copy()
+        st.session_state.last_deploy_message = "Holdings table saved from latest visible editor values."
+
+        ok = save_state()
+        sync_editor_from_portfolio()
+
+        if ok:
+            st.success("Holdings saved and verified in the full protected snapshot.")
+        else:
+            st.error(f"Could not save holdings. Error: {st.session_state.last_save_error}")
 
 
 def render_breakdowns(calc: dict) -> None:

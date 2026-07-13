@@ -21,7 +21,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-07-12-exact-commit-verification-v23"
+APP_BASELINE_VERSION = "2026-07-13-isolated-state-branch-save-v23"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -41,8 +41,10 @@ LEGACY_STATE_FILE = APP_DIR / "retirement_dashboard_state.json"
 LEGACY_BACKUP_FILE = APP_DIR / "retirement_dashboard_state_backup.json"
 LEGACY_LAST_GOOD_FILE = APP_DIR / "retirement_dashboard_state_last_good.json"
 
-# Durable cloud state uses the repository branch already configured in Streamlit Secrets.
+# Durable cloud state is written to a branch separate from the branch that runs
+# the Streamlit app. This prevents every Save from redeploying/restarting the app.
 GITHUB_STATE_DEFAULT_PATH = "retirement_dashboard_state.json"
+GITHUB_STATE_DEFAULT_BRANCH = "dashboard-state"
 
 # Home-folder copies survive app filename changes, Downloads-folder copies, and most local reruns.
 HOME_STATE_DIR = Path.home() / ".retirement_dashboard_state"
@@ -423,15 +425,22 @@ def get_streamlit_secret(name: str, default: str = "") -> str:
 def get_github_persistence_config() -> dict:
     token = get_streamlit_secret("GITHUB_TOKEN")
     repo = get_streamlit_secret("GITHUB_REPO")
-    branch = get_streamlit_secret("GITHUB_BRANCH", "main")
+    source_branch = get_streamlit_secret("GITHUB_BRANCH", "main")
+    state_branch = get_streamlit_secret("GITHUB_STATE_BRANCH", GITHUB_STATE_DEFAULT_BRANCH)
     state_path = get_streamlit_secret("GITHUB_STATE_PATH", GITHUB_STATE_DEFAULT_PATH)
 
-    configured = bool(token and repo and "/" in repo and branch and state_path)
+    # Never write dashboard state onto the deployed source branch. A commit on
+    # that branch makes Streamlit redeploy in the middle of the Save callback.
+    if state_branch == source_branch:
+        state_branch = GITHUB_STATE_DEFAULT_BRANCH
+
+    configured = bool(token and repo and "/" in repo and source_branch and state_branch and state_path)
     return {
         "configured": configured,
         "token": token,
         "repo": repo,
-        "branch": branch,
+        "source_branch": source_branch,
+        "branch": state_branch,
         "state_path": state_path,
     }
 
@@ -443,12 +452,11 @@ def github_persistence_summary() -> str:
     return f"configured: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
 
 
-def github_contents_url(cfg: dict, include_ref: bool = False, ref_override: str = "") -> str:
+def github_contents_url(cfg: dict, include_ref: bool = False) -> str:
     encoded_path = urllib.parse.quote(cfg["state_path"], safe="/")
     url = f"https://api.github.com/repos/{cfg['repo']}/contents/{encoded_path}"
     if include_ref:
-        ref_value = str(ref_override or cfg["branch"]).strip()
-        url += "?ref=" + urllib.parse.quote(ref_value, safe="")
+        url += "?ref=" + urllib.parse.quote(cfg["branch"], safe="")
     return url
 
 
@@ -483,29 +491,75 @@ def github_api_json(cfg: dict, method: str, url: str, body: dict | None = None) 
         raise RuntimeError(f"GitHub API {method} failed with HTTP {exc.code}: {detail}") from exc
 
 
-def github_get_file_metadata(cfg: dict, ref_override: str = "") -> dict | None:
+def github_repo_api_url(cfg: dict, suffix: str) -> str:
+    return f"https://api.github.com/repos/{cfg['repo']}/{suffix.lstrip('/')}"
+
+
+def ensure_github_state_branch(cfg: dict) -> None:
+    """Create the isolated state branch once, using the deployed branch as its base."""
+    state_ref = urllib.parse.quote(f"heads/{cfg['branch']}", safe="/")
+    state_ref_url = github_repo_api_url(cfg, f"git/ref/{state_ref}")
+
     try:
-        return github_api_json(
+        github_api_json(cfg, "GET", state_ref_url)
+        return
+    except RuntimeError as exc:
+        if "HTTP 404" not in str(exc):
+            raise
+
+    source_ref = urllib.parse.quote(f"heads/{cfg['source_branch']}", safe="/")
+    source_meta = github_api_json(cfg, "GET", github_repo_api_url(cfg, f"git/ref/{source_ref}"))
+    source_sha = str(source_meta.get("object", {}).get("sha", "")).strip()
+    if not source_sha:
+        raise RuntimeError(f"Could not resolve source branch {cfg['source_branch']} to create the state branch.")
+
+    try:
+        github_api_json(
             cfg,
-            "GET",
-            github_contents_url(cfg, include_ref=True, ref_override=ref_override),
+            "POST",
+            github_repo_api_url(cfg, "git/refs"),
+            body={"ref": f"refs/heads/{cfg['branch']}", "sha": source_sha},
         )
+    except RuntimeError as exc:
+        # Another simultaneous Save may have created it after our first check.
+        if "HTTP 422" not in str(exc):
+            raise
+
+
+def durable_payload_signature(payload: dict) -> dict:
+    """State comparison that deliberately ignores save time and app version."""
+    normalized = normalize_state_payload(payload)
+    return {
+        "portfolio_df": portfolio_save_signature(normalized.get("portfolio_df", [])),
+        "cash_fdrxx": round_money(normalized.get("cash_fdrxx", 0.0)),
+        "total_contributions": round_money(normalized.get("total_contributions", 0.0)),
+        "protected_min_contributions": round_money(normalized.get("protected_min_contributions", 0.0)),
+        "use_live_prices": bool(normalized.get("use_live_prices", True)),
+        "auto_sync_prices": bool(normalized.get("auto_sync_prices", True)),
+        "last_price_sync": str(normalized.get("last_price_sync", "")),
+        "last_deploy_message": str(normalized.get("last_deploy_message", "")),
+        "last_cash_message": str(normalized.get("last_cash_message", "")),
+    }
+
+
+def github_get_file_metadata(cfg: dict) -> dict | None:
+    try:
+        return github_api_json(cfg, "GET", github_contents_url(cfg, include_ref=True))
     except RuntimeError as exc:
         if "HTTP 404" in str(exc):
             return None
         raise
 
 
-def read_github_state_payload(ref_override: str = "") -> tuple[dict, str]:
+def read_github_state_payload() -> tuple[dict, str]:
     cfg = get_github_persistence_config()
     if not cfg["configured"]:
         return {}, "GitHub persistence not configured"
 
     try:
-        meta = github_get_file_metadata(cfg, ref_override=ref_override)
+        meta = github_get_file_metadata(cfg)
         if not meta:
-            ref_label = ref_override or cfg["branch"]
-            return {}, f"No GitHub state file yet at {cfg['repo']} / {cfg['state_path']} @ {ref_label}"
+            return {}, f"No GitHub state file yet at {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
 
         encoded = str(meta.get("content", "")).replace("\n", "")
         if not encoded:
@@ -544,10 +598,22 @@ def write_github_state_payload(payload: dict) -> tuple[bool, str]:
         return False, "GitHub persistence not configured. Add GITHUB_TOKEN, GITHUB_REPO, and GITHUB_BRANCH in Streamlit Secrets."
 
     try:
+        ensure_github_state_branch(cfg)
         meta = github_get_file_metadata(cfg)
         sha = meta.get("sha") if meta else None
 
         clean_payload = make_payload_from_state(payload, force_timestamp=False)
+
+        # Clicking Save without changing anything must not create a timestamp-only
+        # commit. Besides being unnecessary, that used to restart the deployed app.
+        if meta:
+            existing_payload, _ = read_github_state_payload()
+            if existing_payload and durable_payload_signature(existing_payload) == durable_payload_signature(clean_payload):
+                return True, (
+                    f"No dashboard values changed; existing GitHub state already matches: "
+                    f"{cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+                )
+
         content = base64.b64encode(json.dumps(clean_payload, indent=2).encode("utf-8")).decode("utf-8")
         body = {
             "message": f"Save retirement dashboard state {clean_payload.get('last_saved', '')}",
@@ -557,19 +623,15 @@ def write_github_state_payload(payload: dict) -> tuple[bool, str]:
         if sha:
             body["sha"] = sha
 
-        put_result = github_api_json(cfg, "PUT", github_contents_url(cfg, include_ref=False), body=body)
-        commit_sha = str((put_result.get("commit") or {}).get("sha", "")).strip()
-        if not commit_sha:
-            return False, "GitHub accepted the save but did not return the commit SHA needed for exact verification"
+        github_api_json(cfg, "PUT", github_contents_url(cfg, include_ref=False), body=body)
 
-        # Verify the exact immutable commit GitHub returned, not the moving branch
-        # reference. This prevents a brief stale branch read from falsely reporting
-        # that a successful save failed.
+        # A successful PUT is not enough. Read the durable file back and verify
+        # the exact money fields, timestamp, and holdings before reporting success.
         last_reason = "GitHub read-back did not return the saved state"
         for delay in (0.0, 0.5, 1.0):
             if delay:
                 time.sleep(delay)
-            readback, read_status = read_github_state_payload(ref_override=commit_sha)
+            readback, read_status = read_github_state_payload()
             if readback:
                 matched, reason = payload_matches_expected(readback, clean_payload)
                 if matched:

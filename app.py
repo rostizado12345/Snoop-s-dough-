@@ -21,7 +21,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-07-12-save-readback-rerun-repair-v23"
+APP_BASELINE_VERSION = "2026-07-12-current-save-verification-repair-v23"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -420,11 +420,50 @@ def get_streamlit_secret(name: str, default: str = "") -> str:
     return str(value).strip()
 
 
+def safe_github_state_path(requested_path: str) -> tuple[str, str]:
+    """Return a dedicated JSON path that can never overwrite application code.
+
+    A GitHub Contents API PUT replaces the file at the configured path. If a
+    secret accidentally points at app.py (or another code/config file), sending
+    the JSON state there makes the deployed app fail with a Python/JSON syntax
+    error. The dashboard state is therefore restricted to a standalone .json
+    file and falls back to the known-safe default whenever the configured value
+    is unsafe.
+    """
+    raw = str(requested_path or "").strip().replace("\\", "/")
+    normalized = raw.lstrip("/")
+    basename = Path(normalized).name.lower() if normalized else ""
+
+    unsafe_names = {
+        Path(__file__).name.lower(),
+        "app.py",
+        "streamlit_app.py",
+        "requirements.txt",
+        "packages.txt",
+        "secrets.toml",
+        "config.toml",
+    }
+    unsafe = (
+        not normalized
+        or normalized.startswith("../")
+        or "/../" in f"/{normalized}"
+        or basename in unsafe_names
+        or not basename.endswith(".json")
+    )
+
+    if unsafe:
+        detail = raw or "(blank)"
+        return GITHUB_STATE_DEFAULT_PATH, f"Unsafe GITHUB_STATE_PATH {detail!r} was replaced with {GITHUB_STATE_DEFAULT_PATH!r}."
+
+    return normalized, ""
+
+
 def get_github_persistence_config() -> dict:
     token = get_streamlit_secret("GITHUB_TOKEN")
     repo = get_streamlit_secret("GITHUB_REPO")
     branch = get_streamlit_secret("GITHUB_BRANCH", "main")
-    state_path = get_streamlit_secret("GITHUB_STATE_PATH", GITHUB_STATE_DEFAULT_PATH)
+    requested_state_path = get_streamlit_secret("GITHUB_STATE_PATH", GITHUB_STATE_DEFAULT_PATH)
+    state_path, path_warning = safe_github_state_path(requested_state_path)
 
     configured = bool(token and repo and "/" in repo and branch and state_path)
     return {
@@ -433,6 +472,7 @@ def get_github_persistence_config() -> dict:
         "repo": repo,
         "branch": branch,
         "state_path": state_path,
+        "path_warning": path_warning,
     }
 
 
@@ -440,19 +480,17 @@ def github_persistence_summary() -> str:
     cfg = get_github_persistence_config()
     if not cfg["configured"]:
         return "not configured"
-    return f"configured: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+    summary = f"configured: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+    if cfg.get("path_warning"):
+        summary += f" | {cfg['path_warning']}"
+    return summary
 
 
-def github_contents_url(cfg: dict, include_ref: bool = False, cache_bust: bool = False) -> str:
+def github_contents_url(cfg: dict, include_ref: bool = False) -> str:
     encoded_path = urllib.parse.quote(cfg["state_path"], safe="/")
     url = f"https://api.github.com/repos/{cfg['repo']}/contents/{encoded_path}"
-    params = []
     if include_ref:
-        params.append("ref=" + urllib.parse.quote(cfg["branch"], safe=""))
-    if cache_bust:
-        params.append("_=" + str(time.time_ns()))
-    if params:
-        url += "?" + "&".join(params)
+        url += "?ref=" + urllib.parse.quote(cfg["branch"], safe="")
     return url
 
 
@@ -471,8 +509,6 @@ def github_api_json(cfg: dict, method: str, url: str, body: dict | None = None) 
             "X-GitHub-Api-Version": "2022-11-28",
             "Content-Type": "application/json",
             "User-Agent": "retirement-dashboard-streamlit",
-            "Cache-Control": "no-cache, no-store, max-age=0",
-            "Pragma": "no-cache",
         },
     )
 
@@ -491,7 +527,7 @@ def github_api_json(cfg: dict, method: str, url: str, body: dict | None = None) 
 
 def github_get_file_metadata(cfg: dict) -> dict | None:
     try:
-        return github_api_json(cfg, "GET", github_contents_url(cfg, include_ref=True, cache_bust=True))
+        return github_api_json(cfg, "GET", github_contents_url(cfg, include_ref=True))
     except RuntimeError as exc:
         if "HTTP 404" in str(exc):
             return None
@@ -1236,10 +1272,10 @@ def add_new_money(amount: float) -> None:
         max(st.session_state.protected_min_contributions, st.session_state.total_contributions)
     )
     st.session_state.last_cash_message = f"Added new money: {format_dollars(amount)} to FDRXX."
-    return save_state()
+    save_state()
 
 
-def set_exact_cash(new_cash: float) -> bool:
+def set_exact_cash(new_cash: float) -> None:
     old_cash = round_money(st.session_state.cash_fdrxx)
     new_cash = round_money(new_cash)
     difference = round_money(new_cash - old_cash)
@@ -1249,7 +1285,7 @@ def set_exact_cash(new_cash: float) -> bool:
         f"FDRXX cash set exactly to {format_dollars(new_cash)}. "
         f"Adjustment: {format_dollars(difference)}."
     )
-    return save_state()
+    save_state()
 
 
 def deploy_cash_to_position(ticker: str, dollars: float, calc_df: pd.DataFrame) -> None:
@@ -2097,12 +2133,12 @@ def render_top_controls(calc: dict) -> None:
         set_cash_pressed = st.form_submit_button("Set Exact FDRXX Cash", use_container_width=True)
 
     if set_cash_pressed:
-        saved_ok = set_exact_cash(float(exact_cash))
-        if not saved_ok:
+        set_exact_cash(float(exact_cash))
+        if st.session_state.get("last_save_error"):
             st.error(f"Could not save exact cash: {st.session_state.last_save_error}")
         else:
             st.success("Exact FDRXX cash saved.")
-            st.rerun()
+        st.rerun()
 
     if st.session_state.get("last_cash_message"):
         st.info(st.session_state.last_cash_message)
@@ -2139,9 +2175,9 @@ def render_top_controls(calc: dict) -> None:
 
         if save_state():
             st.success("Total contributions saved.")
-            st.rerun()
         else:
             st.error(f"Could not save: {st.session_state.last_save_error}")
+        st.rerun()
 
     st.markdown("#### Add New Money to FDRXX")
     cols = st.columns(5)

@@ -21,7 +21,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-07-13-isolated-state-branch-save-v23"
+APP_BASELINE_VERSION = "2026-07-13-zero-persistence-save-test-v24"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -2291,28 +2291,11 @@ def render_holdings_editor() -> None:
         save_holdings_pressed = st.form_submit_button("Save Holdings Changes", use_container_width=True)
 
     if save_holdings_pressed:
-        cleaned = normalize_portfolio_df(edited_df)
-        current = normalize_portfolio_df(st.session_state.portfolio_df)
-
-        # A no-change click must not write files, contact GitHub, or rerun the app.
-        # Compare only the actual holdings dataânot timestamps or status messages.
-        if portfolio_save_signature(cleaned) == portfolio_save_signature(current):
-            st.info("No holdings changes detected. Nothing was saved.")
-            return
-
-        st.session_state.portfolio_df = cleaned.copy()
-        st.session_state.editor_df = cleaned.copy()
-        st.session_state.last_deploy_message = "Holdings table saved from latest visible editor values."
-
-        ok = save_state()
-
-        if ok:
-            st.success("Holdings saved and verified in the full protected snapshot.")
-        else:
-            st.error(f"Could not save holdings. Error: {st.session_state.last_save_error}")
-
-        # Do not force an immediate rerun from inside the form callback. The next
-        # normal Streamlit interaction will refresh the display safely.
+        # Diagnostic isolation test:
+        # Do not alter holdings, write local files, contact GitHub, or rerun.
+        # This determines whether the failure comes from form submission itself
+        # or from the persistence path that normally follows it.
+        st.info("Save button test completed. No data was written or changed.")
 
 
 def render_breakdowns(calc: dict) -> None:

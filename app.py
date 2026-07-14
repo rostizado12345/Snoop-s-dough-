@@ -21,7 +21,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-07-13-editor-outside-form-v24"
+APP_BASELINE_VERSION = "2026-07-13-dedicated-state-branch-save-v23"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -41,10 +41,10 @@ LEGACY_STATE_FILE = APP_DIR / "retirement_dashboard_state.json"
 LEGACY_BACKUP_FILE = APP_DIR / "retirement_dashboard_state_backup.json"
 LEGACY_LAST_GOOD_FILE = APP_DIR / "retirement_dashboard_state_last_good.json"
 
-# Durable cloud state is written to a branch separate from the branch that runs
-# the Streamlit app. This prevents every Save from redeploying/restarting the app.
+# Durable cloud state is kept on a dedicated non-deployment branch so a Save
+# cannot trigger Streamlit to redeploy the running app.
 GITHUB_STATE_DEFAULT_PATH = "retirement_dashboard_state.json"
-GITHUB_STATE_DEFAULT_BRANCH = "dashboard-state"
+GITHUB_STATE_DEFAULT_BRANCH = "retirement-dashboard-state"
 
 # Home-folder copies survive app filename changes, Downloads-folder copies, and most local reruns.
 HOME_STATE_DIR = Path.home() / ".retirement_dashboard_state"
@@ -425,22 +425,21 @@ def get_streamlit_secret(name: str, default: str = "") -> str:
 def get_github_persistence_config() -> dict:
     token = get_streamlit_secret("GITHUB_TOKEN")
     repo = get_streamlit_secret("GITHUB_REPO")
-    source_branch = get_streamlit_secret("GITHUB_BRANCH", "main")
-    state_branch = get_streamlit_secret("GITHUB_STATE_BRANCH", GITHUB_STATE_DEFAULT_BRANCH)
+
+    # Never default state commits to the app's deployment branch. A commit to the
+    # deployed branch can make Streamlit restart in the middle of the Save callback.
+    # GITHUB_STATE_BRANCH is optional; the dedicated branch below is created on the
+    # first Save when it does not already exist. The older GITHUB_BRANCH secret is
+    # intentionally not used for state writes because it commonly points to main.
+    branch = get_streamlit_secret("GITHUB_STATE_BRANCH", GITHUB_STATE_DEFAULT_BRANCH)
     state_path = get_streamlit_secret("GITHUB_STATE_PATH", GITHUB_STATE_DEFAULT_PATH)
 
-    # Never write dashboard state onto the deployed source branch. A commit on
-    # that branch makes Streamlit redeploy in the middle of the Save callback.
-    if state_branch == source_branch:
-        state_branch = GITHUB_STATE_DEFAULT_BRANCH
-
-    configured = bool(token and repo and "/" in repo and source_branch and state_branch and state_path)
+    configured = bool(token and repo and "/" in repo and branch and state_path)
     return {
         "configured": configured,
         "token": token,
         "repo": repo,
-        "source_branch": source_branch,
-        "branch": state_branch,
+        "branch": branch,
         "state_path": state_path,
     }
 
@@ -491,57 +490,6 @@ def github_api_json(cfg: dict, method: str, url: str, body: dict | None = None) 
         raise RuntimeError(f"GitHub API {method} failed with HTTP {exc.code}: {detail}") from exc
 
 
-def github_repo_api_url(cfg: dict, suffix: str) -> str:
-    return f"https://api.github.com/repos/{cfg['repo']}/{suffix.lstrip('/')}"
-
-
-def ensure_github_state_branch(cfg: dict) -> None:
-    """Create the isolated state branch once, using the deployed branch as its base."""
-    state_ref = urllib.parse.quote(f"heads/{cfg['branch']}", safe="/")
-    state_ref_url = github_repo_api_url(cfg, f"git/ref/{state_ref}")
-
-    try:
-        github_api_json(cfg, "GET", state_ref_url)
-        return
-    except RuntimeError as exc:
-        if "HTTP 404" not in str(exc):
-            raise
-
-    source_ref = urllib.parse.quote(f"heads/{cfg['source_branch']}", safe="/")
-    source_meta = github_api_json(cfg, "GET", github_repo_api_url(cfg, f"git/ref/{source_ref}"))
-    source_sha = str(source_meta.get("object", {}).get("sha", "")).strip()
-    if not source_sha:
-        raise RuntimeError(f"Could not resolve source branch {cfg['source_branch']} to create the state branch.")
-
-    try:
-        github_api_json(
-            cfg,
-            "POST",
-            github_repo_api_url(cfg, "git/refs"),
-            body={"ref": f"refs/heads/{cfg['branch']}", "sha": source_sha},
-        )
-    except RuntimeError as exc:
-        # Another simultaneous Save may have created it after our first check.
-        if "HTTP 422" not in str(exc):
-            raise
-
-
-def durable_payload_signature(payload: dict) -> dict:
-    """State comparison that deliberately ignores save time and app version."""
-    normalized = normalize_state_payload(payload)
-    return {
-        "portfolio_df": portfolio_save_signature(normalized.get("portfolio_df", [])),
-        "cash_fdrxx": round_money(normalized.get("cash_fdrxx", 0.0)),
-        "total_contributions": round_money(normalized.get("total_contributions", 0.0)),
-        "protected_min_contributions": round_money(normalized.get("protected_min_contributions", 0.0)),
-        "use_live_prices": bool(normalized.get("use_live_prices", True)),
-        "auto_sync_prices": bool(normalized.get("auto_sync_prices", True)),
-        "last_price_sync": str(normalized.get("last_price_sync", "")),
-        "last_deploy_message": str(normalized.get("last_deploy_message", "")),
-        "last_cash_message": str(normalized.get("last_cash_message", "")),
-    }
-
-
 def github_get_file_metadata(cfg: dict) -> dict | None:
     try:
         return github_api_json(cfg, "GET", github_contents_url(cfg, include_ref=True))
@@ -549,6 +497,42 @@ def github_get_file_metadata(cfg: dict) -> dict | None:
         if "HTTP 404" in str(exc):
             return None
         raise
+
+
+def github_ensure_state_branch(cfg: dict) -> None:
+    """Create the dedicated state branch on first use without touching app.py."""
+    branch_ref = urllib.parse.quote(cfg["branch"], safe="")
+    ref_url = f"https://api.github.com/repos/{cfg['repo']}/git/ref/heads/{branch_ref}"
+
+    try:
+        github_api_json(cfg, "GET", ref_url)
+        return
+    except RuntimeError as exc:
+        if "HTTP 404" not in str(exc):
+            raise
+
+    repo_url = f"https://api.github.com/repos/{cfg['repo']}"
+    repo_meta = github_api_json(cfg, "GET", repo_url)
+    default_branch = str(repo_meta.get("default_branch", "main")).strip() or "main"
+    default_ref = urllib.parse.quote(default_branch, safe="")
+    base_ref_url = f"https://api.github.com/repos/{cfg['repo']}/git/ref/heads/{default_ref}"
+    base_ref = github_api_json(cfg, "GET", base_ref_url)
+    base_sha = str(base_ref.get("object", {}).get("sha", "")).strip()
+    if not base_sha:
+        raise RuntimeError("Could not determine the repository default-branch SHA for the state branch.")
+
+    create_ref_url = f"https://api.github.com/repos/{cfg['repo']}/git/refs"
+    try:
+        github_api_json(
+            cfg,
+            "POST",
+            create_ref_url,
+            body={"ref": f"refs/heads/{cfg['branch']}", "sha": base_sha},
+        )
+    except RuntimeError as exc:
+        # Another simultaneous Save may have created it after our first check.
+        if "HTTP 422" not in str(exc):
+            raise
 
 
 def read_github_state_payload() -> tuple[dict, str]:
@@ -595,25 +579,14 @@ def payload_matches_expected(actual: dict, expected: dict) -> tuple[bool, str]:
 def write_github_state_payload(payload: dict) -> tuple[bool, str]:
     cfg = get_github_persistence_config()
     if not cfg["configured"]:
-        return False, "GitHub persistence not configured. Add GITHUB_TOKEN, GITHUB_REPO, and GITHUB_BRANCH in Streamlit Secrets."
+        return False, "GitHub persistence not configured. Add GITHUB_TOKEN and GITHUB_REPO in Streamlit Secrets."
 
     try:
-        ensure_github_state_branch(cfg)
+        github_ensure_state_branch(cfg)
         meta = github_get_file_metadata(cfg)
         sha = meta.get("sha") if meta else None
 
         clean_payload = make_payload_from_state(payload, force_timestamp=False)
-
-        # Clicking Save without changing anything must not create a timestamp-only
-        # commit. Besides being unnecessary, that used to restart the deployed app.
-        if meta:
-            existing_payload, _ = read_github_state_payload()
-            if existing_payload and durable_payload_signature(existing_payload) == durable_payload_signature(clean_payload):
-                return True, (
-                    f"No dashboard values changed; existing GitHub state already matches: "
-                    f"{cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
-                )
-
         content = base64.b64encode(json.dumps(clean_payload, indent=2).encode("utf-8")).decode("utf-8")
         body = {
             "message": f"Save retirement dashboard state {clean_payload.get('last_saved', '')}",
@@ -2268,32 +2241,27 @@ def render_holdings_editor() -> None:
 
     editor_key = f"portfolio_editor_v{st.session_state.get('editor_version', 0)}"
 
-    # Keep the data editor out of a Streamlit form. Submitting a form that
-    # contains a dynamic data editor can fail before the Python callback runs.
-    edited_df = st.data_editor(
-        st.session_state.editor_df,
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True,
-        key=editor_key,
-        column_config={
-            "ticker": st.column_config.TextColumn("Ticker"),
-            "qty": st.column_config.NumberColumn("Qty / Shares", format="%.6f"),
-            "avg_cost": st.column_config.NumberColumn("Avg Cost", format="$%.6f"),
-            "manual_price": st.column_config.NumberColumn("Manual / Fallback Price", format="$%.4f"),
-            "target_weight": st.column_config.NumberColumn("Target Weight %", format="%.2f"),
-            "annual_yield": st.column_config.NumberColumn("Annual Yield", format="%.4f"),
-            "payout_frequency": st.column_config.TextColumn("Payout Frequency"),
-            "payout_months": st.column_config.TextColumn("Payout Months"),
-            "notes": st.column_config.TextColumn("Notes"),
-        },
-    )
+    with st.form(f"holdings_editor_form_v{st.session_state.get('editor_version', 0)}"):
+        edited_df = st.data_editor(
+            st.session_state.editor_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            key=editor_key,
+            column_config={
+                "ticker": st.column_config.TextColumn("Ticker"),
+                "qty": st.column_config.NumberColumn("Qty / Shares", format="%.6f"),
+                "avg_cost": st.column_config.NumberColumn("Avg Cost", format="$%.6f"),
+                "manual_price": st.column_config.NumberColumn("Manual / Fallback Price", format="$%.4f"),
+                "target_weight": st.column_config.NumberColumn("Target Weight %", format="%.2f"),
+                "annual_yield": st.column_config.NumberColumn("Annual Yield", format="%.4f"),
+                "payout_frequency": st.column_config.TextColumn("Payout Frequency"),
+                "payout_months": st.column_config.TextColumn("Payout Months"),
+                "notes": st.column_config.TextColumn("Notes"),
+            },
+        )
 
-    save_holdings_pressed = st.button(
-        "Save Holdings Changes",
-        use_container_width=True,
-        key=f"save_holdings_button_v{st.session_state.get('editor_version', 0)}",
-    )
+        save_holdings_pressed = st.form_submit_button("Save Holdings Changes", use_container_width=True)
 
     if save_holdings_pressed:
         cleaned = normalize_portfolio_df(edited_df)
@@ -2308,6 +2276,8 @@ def render_holdings_editor() -> None:
             st.success("Holdings saved and verified in the full protected snapshot.")
         else:
             st.error(f"Could not save holdings. Error: {st.session_state.last_save_error}")
+
+        st.rerun()
 
 
 def render_breakdowns(calc: dict) -> None:

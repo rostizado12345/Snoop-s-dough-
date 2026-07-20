@@ -432,6 +432,33 @@ def supabase_persistence_summary() -> str:
     return f"configured: {cfg['table']} at {cfg['url']}"
 
 
+def _json_safe(value):
+    """Return strict JSON-safe built-in values for Supabase/PostgREST.
+
+    Python's json module permits NaN/Infinity by default, but PostgREST rejects
+    them as invalid JSON. Pandas/numpy scalar values are also converted here.
+    """
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else 0.0
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if hasattr(value, "item"):
+        try:
+            return _json_safe(value.item())
+        except Exception:
+            pass
+    return str(value)
+
+
 def supabase_api_json(
     cfg: dict,
     method: str,
@@ -444,14 +471,29 @@ def supabase_api_json(
     if query:
         endpoint += "?" + query
 
-    data = None if body is None else json.dumps(body).encode("utf-8")
+    data = None
+    if body is not None:
+        safe_body = _json_safe(body)
+        # allow_nan=False guarantees that invalid NaN/Infinity tokens can never
+        # reach Supabase and trigger PGRST102 (empty or invalid JSON).
+        data = json.dumps(
+            safe_body,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if not data or data == b"null":
+            raise RuntimeError("Refusing to send an empty Supabase JSON body")
+
     headers = {
         "apikey": cfg["key"],
         "Authorization": f"Bearer {cfg['key']}",
         "Accept": "application/json",
-        "Content-Type": "application/json",
+        "Content-Type": "application/json; charset=utf-8",
         "User-Agent": "retirement-dashboard-streamlit",
     }
+    if data is not None:
+        headers["Content-Length"] = str(len(data))
     if prefer:
         headers["Prefer"] = prefer
 
@@ -465,7 +507,11 @@ def supabase_api_json(
             detail = exc.read().decode("utf-8")
         except Exception:
             detail = str(exc)
-        raise RuntimeError(f"Supabase REST {method} failed with HTTP {exc.code}: {detail}") from exc
+        body_size = 0 if data is None else len(data)
+        raise RuntimeError(
+            f"Supabase REST {method} failed with HTTP {exc.code} "
+            f"(JSON bytes sent: {body_size}): {detail}"
+        ) from exc
 
 
 def _extract_supabase_payload(row: dict) -> dict:

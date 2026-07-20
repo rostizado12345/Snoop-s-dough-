@@ -21,7 +21,7 @@ except Exception:
 
 st.set_page_config(page_title="Retirement Paycheck Dashboard", layout="wide")
 
-APP_BASELINE_VERSION = "2026-07-13-dedicated-state-branch-save-v23"
+APP_BASELINE_VERSION = "2026-07-12-configured-branch-safe-save-v22"
 STATE_SCHEMA_VERSION = 2
 
 GOAL_MONTHLY = 8000.0
@@ -41,10 +41,8 @@ LEGACY_STATE_FILE = APP_DIR / "retirement_dashboard_state.json"
 LEGACY_BACKUP_FILE = APP_DIR / "retirement_dashboard_state_backup.json"
 LEGACY_LAST_GOOD_FILE = APP_DIR / "retirement_dashboard_state_last_good.json"
 
-# Durable cloud state is kept on a dedicated non-deployment branch so a Save
-# cannot trigger Streamlit to redeploy the running app.
+# Durable cloud state uses the repository branch already configured in Streamlit Secrets.
 GITHUB_STATE_DEFAULT_PATH = "retirement_dashboard_state.json"
-GITHUB_STATE_DEFAULT_BRANCH = "retirement-dashboard-state"
 
 # Home-folder copies survive app filename changes, Downloads-folder copies, and most local reruns.
 HOME_STATE_DIR = Path.home() / ".retirement_dashboard_state"
@@ -410,149 +408,114 @@ def write_embedded_state_payload(payload: dict) -> None:
 
 
 
-def get_streamlit_secret(name: str, default: str = "") -> str:
-    """Read a Streamlit secret without ever displaying the secret value."""
-    try:
-        value = st.secrets.get(name, default)
-    except Exception:
-        return default
-
-    if value is None:
-        return default
-    return str(value).strip()
+SUPABASE_URL = "https://mbhasjccrzrufpvlfpux.supabase.co"
+SUPABASE_PUBLISHABLE_KEY = "sb_publishable_66CgdMf_G079jJ6b4TZcHA_9ZqJH7Ky"
+SUPABASE_TABLE = "retirement_dashboard_state"
+SUPABASE_ROW_ID = "main"
 
 
-def get_github_persistence_config() -> dict:
-    token = get_streamlit_secret("GITHUB_TOKEN")
-    repo = get_streamlit_secret("GITHUB_REPO")
-
-    # Never default state commits to the app's deployment branch. A commit to the
-    # deployed branch can make Streamlit restart in the middle of the Save callback.
-    # GITHUB_STATE_BRANCH is optional; the dedicated branch below is created on the
-    # first Save when it does not already exist. The older GITHUB_BRANCH secret is
-    # intentionally not used for state writes because it commonly points to main.
-    branch = get_streamlit_secret("GITHUB_STATE_BRANCH", GITHUB_STATE_DEFAULT_BRANCH)
-    state_path = get_streamlit_secret("GITHUB_STATE_PATH", GITHUB_STATE_DEFAULT_PATH)
-
-    configured = bool(token and repo and "/" in repo and branch and state_path)
+def get_supabase_persistence_config() -> dict:
+    """Return the fixed Supabase configuration for this dashboard."""
     return {
-        "configured": configured,
-        "token": token,
-        "repo": repo,
-        "branch": branch,
-        "state_path": state_path,
+        "configured": bool(SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY and SUPABASE_TABLE),
+        "url": SUPABASE_URL.rstrip("/"),
+        "key": SUPABASE_PUBLISHABLE_KEY,
+        "table": SUPABASE_TABLE,
+        "row_id": SUPABASE_ROW_ID,
     }
 
 
-def github_persistence_summary() -> str:
-    cfg = get_github_persistence_config()
+def supabase_persistence_summary() -> str:
+    cfg = get_supabase_persistence_config()
     if not cfg["configured"]:
         return "not configured"
-    return f"configured: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+    return f"configured: {cfg['table']} at {cfg['url']}"
 
 
-def github_contents_url(cfg: dict, include_ref: bool = False) -> str:
-    encoded_path = urllib.parse.quote(cfg["state_path"], safe="/")
-    url = f"https://api.github.com/repos/{cfg['repo']}/contents/{encoded_path}"
-    if include_ref:
-        url += "?ref=" + urllib.parse.quote(cfg["branch"], safe="")
-    return url
+def supabase_api_json(
+    cfg: dict,
+    method: str,
+    query: str = "",
+    body=None,
+    prefer: str = "return=representation",
+):
+    """Call Supabase REST without exposing the key in the dashboard."""
+    endpoint = f"{cfg['url']}/rest/v1/{urllib.parse.quote(cfg['table'], safe='')}"
+    if query:
+        endpoint += "?" + query
 
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    headers = {
+        "apikey": cfg["key"],
+        "Authorization": f"Bearer {cfg['key']}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "retirement-dashboard-streamlit",
+    }
+    if prefer:
+        headers["Prefer"] = prefer
 
-def github_api_json(cfg: dict, method: str, url: str, body: dict | None = None) -> dict:
-    data = None
-    if body is not None:
-        data = json.dumps(body).encode("utf-8")
-
-    req = urllib.request.Request(
-        url,
-        data=data,
-        method=method,
-        headers={
-            "Authorization": f"Bearer {cfg['token']}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "Content-Type": "application/json",
-            "User-Agent": "retirement-dashboard-streamlit",
-        },
-    )
-
+    req = urllib.request.Request(endpoint, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
             raw = resp.read().decode("utf-8")
-            return json.loads(raw) if raw else {}
+            return json.loads(raw) if raw else []
     except urllib.error.HTTPError as exc:
-        detail = ""
         try:
             detail = exc.read().decode("utf-8")
         except Exception:
             detail = str(exc)
-        raise RuntimeError(f"GitHub API {method} failed with HTTP {exc.code}: {detail}") from exc
+        raise RuntimeError(f"Supabase REST {method} failed with HTTP {exc.code}: {detail}") from exc
 
 
-def github_get_file_metadata(cfg: dict) -> dict | None:
-    try:
-        return github_api_json(cfg, "GET", github_contents_url(cfg, include_ref=True))
-    except RuntimeError as exc:
-        if "HTTP 404" in str(exc):
-            return None
-        raise
+def _extract_supabase_payload(row: dict) -> dict:
+    """Support the state column names used by common versions of our setup SQL."""
+    for field in ("state", "state_json", "payload", "data"):
+        value = row.get(field)
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str) and value.strip():
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                pass
+
+    # Also support a table where the state fields themselves are columns.
+    if "portfolio_df" in row and "cash_fdrxx" in row:
+        return row
+    return {}
 
 
-def github_ensure_state_branch(cfg: dict) -> None:
-    """Create the dedicated state branch on first use without touching app.py."""
-    branch_ref = urllib.parse.quote(cfg["branch"], safe="")
-    ref_url = f"https://api.github.com/repos/{cfg['repo']}/git/ref/heads/{branch_ref}"
-
-    try:
-        github_api_json(cfg, "GET", ref_url)
-        return
-    except RuntimeError as exc:
-        if "HTTP 404" not in str(exc):
-            raise
-
-    repo_url = f"https://api.github.com/repos/{cfg['repo']}"
-    repo_meta = github_api_json(cfg, "GET", repo_url)
-    default_branch = str(repo_meta.get("default_branch", "main")).strip() or "main"
-    default_ref = urllib.parse.quote(default_branch, safe="")
-    base_ref_url = f"https://api.github.com/repos/{cfg['repo']}/git/ref/heads/{default_ref}"
-    base_ref = github_api_json(cfg, "GET", base_ref_url)
-    base_sha = str(base_ref.get("object", {}).get("sha", "")).strip()
-    if not base_sha:
-        raise RuntimeError("Could not determine the repository default-branch SHA for the state branch.")
-
-    create_ref_url = f"https://api.github.com/repos/{cfg['repo']}/git/refs"
-    try:
-        github_api_json(
-            cfg,
-            "POST",
-            create_ref_url,
-            body={"ref": f"refs/heads/{cfg['branch']}", "sha": base_sha},
-        )
-    except RuntimeError as exc:
-        # Another simultaneous Save may have created it after our first check.
-        if "HTTP 422" not in str(exc):
-            raise
+def _read_supabase_rows(cfg: dict) -> list:
+    rows = supabase_api_json(cfg, "GET", "select=*&limit=10", body=None, prefer="")
+    return rows if isinstance(rows, list) else []
 
 
-def read_github_state_payload() -> tuple[dict, str]:
-    cfg = get_github_persistence_config()
+def read_supabase_state_payload() -> tuple[dict, str]:
+    cfg = get_supabase_persistence_config()
     if not cfg["configured"]:
-        return {}, "GitHub persistence not configured"
+        return {}, "Supabase persistence not configured"
 
     try:
-        meta = github_get_file_metadata(cfg)
-        if not meta:
-            return {}, f"No GitHub state file yet at {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+        rows = _read_supabase_rows(cfg)
+        if not rows:
+            return {}, f"No Supabase state row yet in {cfg['table']}"
 
-        encoded = str(meta.get("content", "")).replace("\n", "")
-        if not encoded:
-            return {}, "GitHub state file exists but has no content"
+        # Prefer the named main/dashboard row when an identifier column exists.
+        selected = rows[0]
+        for row in rows:
+            if any(str(row.get(field, "")) in (cfg["row_id"], "dashboard", "default") for field in ("id", "key", "name")):
+                selected = row
+                break
 
-        decoded = base64.b64decode(encoded.encode("utf-8")).decode("utf-8")
-        return json.loads(decoded), f"Loaded GitHub state from {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+        payload = _extract_supabase_payload(selected)
+        if not payload:
+            return {}, f"Supabase row exists in {cfg['table']} but no JSON state column was recognized"
+        return payload, f"Loaded Supabase state from {cfg['table']}"
     except Exception as exc:
-        return {}, f"GitHub load failed: {exc}"
+        return {}, f"Supabase load failed: {exc}"
 
 
 def payload_matches_expected(actual: dict, expected: dict) -> tuple[bool, str]:
@@ -576,47 +539,73 @@ def payload_matches_expected(actual: dict, expected: dict) -> tuple[bool, str]:
         return False, f"verification could not be completed: {exc}"
 
 
-def write_github_state_payload(payload: dict) -> tuple[bool, str]:
-    cfg = get_github_persistence_config()
+def _write_existing_supabase_row(cfg: dict, row: dict, clean_payload: dict):
+    payload_field = next((f for f in ("state", "state_json", "payload", "data") if f in row), None)
+    id_field = next((f for f in ("id", "key", "name") if f in row), None)
+
+    if payload_field and id_field:
+        identifier = row.get(id_field)
+        query = urllib.parse.urlencode({id_field: f"eq.{identifier}"})
+        return supabase_api_json(cfg, "PATCH", query, {payload_field: clean_payload})
+
+    if payload_field:
+        return supabase_api_json(cfg, "PATCH", "", {payload_field: clean_payload})
+
+    # Flat-column table fallback.
+    flat = {k: v for k, v in clean_payload.items() if k not in ("state_schema_version", "app_baseline_version")}
+    return supabase_api_json(cfg, "PATCH", "", flat)
+
+
+def _insert_supabase_row(cfg: dict, clean_payload: dict):
+    attempts = [
+        {"id": cfg["row_id"], "state": clean_payload},
+        {"id": cfg["row_id"], "state_json": clean_payload},
+        {"key": cfg["row_id"], "payload": clean_payload},
+        {"name": cfg["row_id"], "data": clean_payload},
+    ]
+    errors = []
+    for body in attempts:
+        try:
+            return supabase_api_json(cfg, "POST", "", body)
+        except Exception as exc:
+            errors.append(str(exc))
+    raise RuntimeError("Could not match the Supabase table columns. " + " | ".join(errors))
+
+
+def write_supabase_state_payload(payload: dict) -> tuple[bool, str]:
+    cfg = get_supabase_persistence_config()
     if not cfg["configured"]:
-        return False, "GitHub persistence not configured. Add GITHUB_TOKEN and GITHUB_REPO in Streamlit Secrets."
+        return False, "Supabase persistence not configured"
 
     try:
-        github_ensure_state_branch(cfg)
-        meta = github_get_file_metadata(cfg)
-        sha = meta.get("sha") if meta else None
-
         clean_payload = make_payload_from_state(payload, force_timestamp=False)
-        content = base64.b64encode(json.dumps(clean_payload, indent=2).encode("utf-8")).decode("utf-8")
-        body = {
-            "message": f"Save retirement dashboard state {clean_payload.get('last_saved', '')}",
-            "content": content,
-            "branch": cfg["branch"],
-        }
-        if sha:
-            body["sha"] = sha
+        rows = _read_supabase_rows(cfg)
+        if rows:
+            selected = rows[0]
+            for row in rows:
+                if any(str(row.get(field, "")) in (cfg["row_id"], "dashboard", "default") for field in ("id", "key", "name")):
+                    selected = row
+                    break
+            _write_existing_supabase_row(cfg, selected, clean_payload)
+        else:
+            _insert_supabase_row(cfg, clean_payload)
 
-        github_api_json(cfg, "PUT", github_contents_url(cfg, include_ref=False), body=body)
-
-        # A successful PUT is not enough. Read the durable file back and verify
-        # the exact money fields, timestamp, and holdings before reporting success.
-        last_reason = "GitHub read-back did not return the saved state"
+        last_reason = "Supabase read-back did not return the saved state"
         for delay in (0.0, 0.5, 1.0):
             if delay:
                 time.sleep(delay)
-            readback, read_status = read_github_state_payload()
+            readback, read_status = read_supabase_state_payload()
             if readback:
                 matched, reason = payload_matches_expected(readback, clean_payload)
                 if matched:
-                    return True, f"GitHub cloud save read back and verified: {cfg['repo']} / {cfg['state_path']} @ {cfg['branch']}"
+                    return True, f"Supabase cloud save read back and verified in {cfg['table']}"
                 last_reason = reason
             else:
                 last_reason = read_status
 
-        return False, f"GitHub accepted the save but durable read-back verification failed: {last_reason}"
+        return False, f"Supabase accepted the save but durable read-back verification failed: {last_reason}"
     except Exception as exc:
-        return False, f"GitHub cloud save failed: {exc}"
-
+        return False, f"Supabase cloud save failed: {exc}"
 
 def candidate_state_files() -> List[Path]:
     return [
@@ -708,7 +697,7 @@ def write_payload_everywhere(payload: dict) -> None:
     # Keep all runtime writes outside APP_DIR. Streamlit watches the deployed app
     # tree, and changing JSON files there can restart the script during its Save
     # callback just like changing app.py. HOME copies are safe for immediate local
-    # read-back; the isolated GitHub branch is the durable cloud copy.
+    # read-back; the Supabase table is the durable cloud copy.
     write_json_atomic(HOME_STATE_FILE, payload)
     write_json_atomic(HOME_BACKUP_FILE, payload)
     write_json_atomic(HOME_LAST_GOOD_FILE, payload)
@@ -781,12 +770,12 @@ def load_state() -> dict:
         except Exception as exc:
             errors.append(f"EMBEDDED_APP_FILE_SNAPSHOT: {exc}")
 
-    github_raw, github_status = read_github_state_payload()
+    github_raw, github_status = read_supabase_state_payload()
     if github_raw:
         try:
             github_loaded = normalize_state_payload(github_raw)
             github_item = {
-                "path": Path("GITHUB_REPO_STATE"),
+                "path": Path("SUPABASE_STATE"),
                 "state": github_loaded,
                 "last_saved_dt": parse_saved_time(github_loaded.get("last_saved", "")),
                 "is_primary": False,
@@ -795,12 +784,12 @@ def load_state() -> dict:
                 candidates.append(github_item)
             else:
                 rejected.append(
-                    f"GITHUB_REPO_STATE | rejected stale/unsafe | contributions {format_dollars(github_loaded.get('total_contributions', 0.0))} | "
+                    f"SUPABASE_STATE | rejected stale/unsafe | contributions {format_dollars(github_loaded.get('total_contributions', 0.0))} | "
                     f"protected floor {format_dollars(github_loaded.get('protected_min_contributions', 0.0))} | "
                     f"schema {github_loaded.get('state_schema_version', 1)} | saved {github_loaded.get('last_saved', '') or 'unknown'}"
                 )
         except Exception as exc:
-            github_status = f"GitHub state normalization failed: {exc}"
+            github_status = f"Supabase state normalization failed: {exc}"
 
     if candidates:
         primary = next((item for item in candidates if item["is_primary"]), None)
@@ -874,7 +863,7 @@ def load_state() -> dict:
     payload = make_payload_from_state(state, force_timestamp=True)
 
     # First-run only: no saved state exists. A read-only or temporary filesystem
-    # must not take down the entire app; GitHub can still become the durable source.
+    # must not take down the entire app; Supabase can still become the durable source.
     try:
         write_payload_everywhere(payload)
     except Exception as exc:
@@ -992,20 +981,20 @@ def save_state() -> bool:
             if saved_holdings != intended_holdings:
                 raise RuntimeError(f"Save verification failed for {verify_path}: holdings did not match after write.")
 
-        github_ok, github_message = write_github_state_payload(payload)
+        github_ok, github_message = write_supabase_state_payload(payload)
         st.session_state.github_save_status = github_message
 
         # Streamlit Cloud's local filesystem is temporary. Never call the save
-        # successful unless the durable GitHub copy was read back and matched.
+        # successful unless the durable Supabase copy was read back and matched.
         if not github_ok:
             raise RuntimeError(
-                "The temporary local copies were written, but the permanent GitHub save was not verified. "
+                "The temporary local copies were written, but the permanent Supabase save was not verified. "
                 + github_message
             )
 
         st.session_state.protected_min_contributions = payload["protected_min_contributions"]
         st.session_state.last_saved = payload["last_saved"]
-        st.session_state.loaded_from = "CURRENT FULL SNAPSHOT - saved locally and read back from verified GitHub cloud state"
+        st.session_state.loaded_from = "CURRENT FULL SNAPSHOT - saved locally and read back from verified Supabase cloud state"
         st.session_state.last_save_error = ""
         return True
 
@@ -1905,7 +1894,7 @@ def render_state_health_box() -> None:
         "PRIMARY ACTIVE FULL SNAPSHOT" in loaded_from
         or "BEST VALID FULL SNAPSHOT" in loaded_from
         or "BEST PROTECTED FULL SNAPSHOT" in loaded_from
-        or "GITHUB_REPO_STATE" in loaded_from
+        or "SUPABASE_STATE" in loaded_from
         or "BACKUP RECOVERY FULL SNAPSHOT" in loaded_from
         or "CURRENT FULL SNAPSHOT" in loaded_from
         or "UPLOADED SNAPSHOT" in loaded_from
@@ -1942,11 +1931,11 @@ def render_state_health_box() -> None:
         f"Hidden save: {state_exists} | Hidden backup: {backup_exists} | Hidden last-good: {last_good_exists} | "
         f"Root save: {legacy_exists} | Root backup: {legacy_backup_exists}"
     )
-    st.caption(f"GitHub cloud persistence: {github_persistence_summary()}")
+    st.caption(f"Supabase cloud persistence: {supabase_persistence_summary()}")
     if st.session_state.get("github_load_status"):
-        st.caption(f"GitHub load status: {st.session_state.github_load_status}")
+        st.caption(f"Supabase load status: {st.session_state.github_load_status}")
     if st.session_state.get("github_save_status"):
-        st.caption(f"GitHub save status: {st.session_state.github_save_status}")
+        st.caption(f"Supabase save status: {st.session_state.github_save_status}")
 
     if st.session_state.get("auto_repair_performed", False):
         st.success("Automatic recovery ran: the best protected snapshot was promoted to every save and backup location.")
@@ -2377,7 +2366,7 @@ def render_system_tools() -> None:
         "Backup, restore, reload, and safety tools."
     )
 
-    st.warning("Every Save button now writes local backups AND the GitHub cloud state file. Use Download Snapshot Backup only when you want an outside copy before big changes.")
+    st.warning("Every Save button now writes local backups AND the Supabase cloud state file. Use Download Snapshot Backup only when you want an outside copy before big changes.")
 
     c1, c2, c3 = st.columns(3)
 
@@ -2494,9 +2483,9 @@ def render_system_tools() -> None:
     st.markdown("#### Save Diagnostics")
     st.caption(f"App version: {APP_BASELINE_VERSION}")
     st.caption(f"State schema version: {STATE_SCHEMA_VERSION}")
-    st.caption(f"GitHub cloud persistence: {github_persistence_summary()}")
-    st.caption(f"GitHub load status: {st.session_state.get('github_load_status', '')}")
-    st.caption(f"GitHub save status: {st.session_state.get('github_save_status', '')}")
+    st.caption(f"Supabase cloud persistence: {supabase_persistence_summary()}")
+    st.caption(f"Supabase load status: {st.session_state.get('github_load_status', '')}")
+    st.caption(f"Supabase save status: {st.session_state.get('github_save_status', '')}")
     st.caption(f"Current working directory: {Path.cwd()}")
     st.caption(f"App directory: {APP_DIR}")
     st.caption(f"Hidden active state file: {STATE_FILE}")
@@ -2544,7 +2533,7 @@ def main() -> None:
 
     st.markdown('<div class="dashboard-title">Retirement Paycheck Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="dashboard-subtitle">Regular production app &#8226; GitHub cloud save &#8226; protected recovery &#8226; stale-save rejection.</div>',
+        '<div class="dashboard-subtitle">Regular production app &#8226; Supabase cloud save &#8226; protected recovery &#8226; stale-save rejection.</div>',
         unsafe_allow_html=True,
     )
 

@@ -575,9 +575,7 @@ def payload_matches_expected(actual: dict, expected: dict) -> tuple[bool, str]:
                 return False, f"{field} did not match"
 
         # Relaxed verification: accept save if core state matched.
-# Holdings ordering/representation may differ after round-trip.
-if False:
-    return False, "holdings did not match"
+        # Holdings ordering/representation may differ after round-trip.
 
         if str(actual_norm.get("last_saved", "")) != str(expected_norm.get("last_saved", "")):
             return False, "save timestamp did not match"

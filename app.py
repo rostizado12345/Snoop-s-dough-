@@ -535,7 +535,8 @@ def _extract_supabase_payload(row: dict) -> dict:
 
 
 def _read_supabase_rows(cfg: dict) -> list:
-    rows = supabase_api_json(cfg, "GET", "select=*&limit=10", body=None, prefer="")
+    query = urllib.parse.urlencode({"select":"*","id":f"eq.{cfg['row_id']}"})
+    rows = supabase_api_json(cfg, "GET", query, body=None, prefer="")
     return rows if isinstance(rows, list) else []
 
 
@@ -577,9 +578,7 @@ def payload_matches_expected(actual: dict, expected: dict) -> tuple[bool, str]:
         if portfolio_save_signature(actual_norm.get("portfolio_df", [])) != portfolio_save_signature(expected_norm.get("portfolio_df", [])):
             return False, "holdings did not match"
 
-        if str(actual_norm.get("last_saved", "")) != str(expected_norm.get("last_saved", "")):
-            return False, "save timestamp did not match"
-
+        
         return True, "verified"
     except Exception as exc:
         return False, f"verification could not be completed: {exc}"

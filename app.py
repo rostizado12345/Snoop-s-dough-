@@ -29,6 +29,27 @@ GOAL_MONTHLY = 8000.0
 REALISTIC_INCOME_FACTOR = 0.843
 CONSERVATIVE_INCOME_FACTOR = 0.632
 
+# Master allocation agreed for directing new distributions. These are relative
+# portfolio targets; the planner normalizes them across invested holdings so the
+# fixed cash reserve can remain a dollar amount instead of a forced percentage.
+MASTER_TARGET_WEIGHTS = {
+    "SPYI": 16.0,
+    "DIVO": 13.0,
+    "QQQI": 10.0,
+    "FEPI": 8.0,
+    "SVOL": 6.0,
+    "CHPY": 5.0,
+    "GDXY": 5.0,
+    "AIPI": 4.0,
+    "TLTW": 4.0,
+    "IYRI": 3.0,
+    "PFFA": 2.0,
+    "IWMI": 2.0,
+    "MLPI": 2.0,
+    "IAU": 2.0,
+}
+CASH_RESERVE_FLOOR = 150000.0
+
 APP_DIR = Path(__file__).resolve().parent
 STATE_DIR = APP_DIR / ".retirement_dashboard_state"
 STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1859,6 +1880,17 @@ def inject_dashboard_css() -> None:
             color: #047857 !important;
             border: 1px solid #bbf7d0;
         }
+
+        .planner-shell { margin-top:22px; margin-bottom:18px; padding:24px 25px 20px 25px; border-radius:26px; background:linear-gradient(145deg,#0f172a 0%,#172554 58%,#1e3a8a 100%); box-shadow:0 18px 44px rgba(15,23,42,.24); border:1px solid rgba(255,255,255,.12); }
+        .planner-kicker { color:#93c5fd !important; font-weight:900; font-size:.76rem; letter-spacing:.14em; text-transform:uppercase; }
+        .planner-title { color:#fff !important; font-size:1.72rem; font-weight:950; letter-spacing:-.04em; margin-top:5px; }
+        .planner-subtitle { color:#cbd5e1 !important; font-size:.95rem; font-weight:600; margin-top:5px; line-height:1.4; }
+        .planner-buy { display:flex; justify-content:space-between; align-items:center; gap:18px; padding:14px 16px; margin:9px 0; border-radius:17px; background:rgba(255,255,255,.96); border:1px solid rgba(255,255,255,.7); box-shadow:0 8px 20px rgba(15,23,42,.12); }
+        .planner-rank { color:#64748b !important; font-size:.78rem; font-weight:900; text-transform:uppercase; letter-spacing:.08em; }
+        .planner-ticker { color:#0f172a !important; font-size:1.16rem; font-weight:950; letter-spacing:-.02em; }
+        .planner-detail { color:#64748b !important; font-size:.82rem; font-weight:650; margin-top:2px; }
+        .planner-amount { color:#047857 !important; font-size:1.28rem; font-weight:950; white-space:nowrap; }
+        .planner-total { color:#1e3a8a !important; font-weight:900; font-size:.92rem; margin-top:12px; padding:12px 14px; border-radius:14px; background:#eff6ff; border:1px solid #bfdbfe; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -2269,6 +2301,116 @@ def render_deploy_cash(calc: dict) -> None:
         st.success(st.session_state.last_deploy_message)
 
 
+
+def build_distribution_buy_plan(calc_df: pd.DataFrame, amount_to_invest: float) -> pd.DataFrame:
+    """Allocate new cash proportionally to each holding's dollar shortfall.
+
+    Recommendation-only: this never changes shares, cash, or saved state.
+    """
+    amount_to_invest = round_money(amount_to_invest)
+    if amount_to_invest <= 0 or calc_df.empty:
+        return pd.DataFrame()
+
+    current_values = {
+        str(row["ticker"]).upper().strip(): max(0.0, to_float(row.get("market_value", 0.0)))
+        for _, row in calc_df.iterrows()
+    }
+    eligible = {ticker: weight for ticker, weight in MASTER_TARGET_WEIGHTS.items() if ticker in current_values and weight > 0}
+    eligible_total = sum(eligible.values())
+    if eligible_total <= 0:
+        return pd.DataFrame()
+
+    current_holdings = sum(current_values.get(t, 0.0) for t in eligible)
+    post_buy_holdings = current_holdings + amount_to_invest
+    rows = []
+    for ticker, master_weight in eligible.items():
+        normalized_target = master_weight / eligible_total
+        current_value = current_values.get(ticker, 0.0)
+        target_value_after_buy = normalized_target * post_buy_holdings
+        shortfall = max(0.0, target_value_after_buy - current_value)
+        rows.append({
+            "ticker": ticker,
+            "master_target": master_weight,
+            "normalized_target": normalized_target,
+            "current_mix": current_value / current_holdings if current_holdings > 0 else 0.0,
+            "current_value": current_value,
+            "shortfall": shortfall,
+        })
+
+    total_shortfall = sum(r["shortfall"] for r in rows)
+    if total_shortfall <= 0:
+        return pd.DataFrame()
+
+    budget = min(amount_to_invest, total_shortfall)
+    for r in rows:
+        r["suggested_buy"] = budget * r["shortfall"] / total_shortfall if r["shortfall"] > 0 else 0.0
+
+    plan = pd.DataFrame(rows)
+    plan = plan[plan["suggested_buy"] >= 0.01].copy()
+    if plan.empty:
+        return plan
+    plan["suggested_buy"] = plan["suggested_buy"].round(2)
+    rounding_difference = round_money(budget - float(plan["suggested_buy"].sum()))
+    if abs(rounding_difference) >= 0.01:
+        idx = plan["suggested_buy"].idxmax()
+        plan.at[idx, "suggested_buy"] = round_money(plan.at[idx, "suggested_buy"] + rounding_difference)
+
+    plan = plan.sort_values(["suggested_buy", "shortfall"], ascending=[False, False]).reset_index(drop=True)
+    plan.insert(0, "priority", range(1, len(plan) + 1))
+    return plan
+
+
+def render_distribution_buy_planner(calc: dict) -> None:
+    cash = round_money(st.session_state.cash_fdrxx)
+    automatic_excess = max(0.0, round_money(cash - CASH_RESERVE_FLOOR))
+
+    st.markdown(
+        '<div class="planner-shell"><div class="planner-kicker">Smart allocation tool</div><div class="planner-title">Distribution Buy Planner</div><div class="planner-subtitle">Enter the amount available to invest. The app divides it among the holdings furthest below the master allocation, without changing anything automatically.</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    summary_cols = st.columns(3)
+    summary_cols[0].metric("FDRXX Cash", format_dollars(cash))
+    summary_cols[1].metric("Reserve Reference", format_dollars(CASH_RESERVE_FLOOR))
+    summary_cols[2].metric("Cash Above Reserve", format_dollars(automatic_excess))
+
+    amount_to_invest = st.number_input(
+        "Amount available for suggested purchases",
+        min_value=0.0,
+        max_value=max(cash, 0.0),
+        value=float(automatic_excess),
+        step=100.0,
+        format="%.2f",
+        key="distribution_planner_amount",
+        help="Planning only. Nothing is bought or saved automatically.",
+    )
+
+    plan = build_distribution_buy_plan(calc["df"], float(amount_to_invest))
+    if amount_to_invest <= 0:
+        st.info("No excess amount is available right now. As distributions rebuild cash above the reserve, recommendations will appear automatically.")
+        return
+    if plan.empty:
+        st.success("All eligible holdings are at or above their relative targets for this amount.")
+        return
+
+    st.markdown("#### Suggested Purchases")
+    for _, row in plan.iterrows():
+        card = (
+            f'<div class="planner-buy"><div><div class="planner-rank">Priority {int(row["priority"])}</div>'
+            f'<div class="planner-ticker">{row["ticker"]}</div>'
+            f'<div class="planner-detail">Current mix {row["current_mix"]:.2%} &nbsp;â¢&nbsp; Target mix {row["normalized_target"]:.2%}</div></div>'
+            f'<div class="planner-amount">{format_dollars(row["suggested_buy"])}</div></div>'
+        )
+        st.markdown(card, unsafe_allow_html=True)
+
+    planned_total = round_money(float(plan["suggested_buy"].sum()))
+    st.markdown(
+        f'<div class="planner-total">â Total suggested purchases: {format_dollars(planned_total)} &nbsp;â¢&nbsp; {len(plan)} holdings below target</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption("Master targets: SPYI 16, DIVO 13, QQQI 10, FEPI 8, SVOL 6, CHPY 5, GDXY 5, AIPI 4, TLTW 4, IYRI 3, PFFA 2, IWMI 2, MLPI 2, IAU 2. They are normalized across invested holdings because cash is managed as a fixed dollar reserve.")
+
+
 def render_holdings_editor() -> None:
     render_section_header(
         "Portfolio Holdings Editor",
@@ -2638,6 +2780,8 @@ def main() -> None:
     )
 
     render_metrics(calc)
+
+    render_distribution_buy_planner(calc)
 
     with st.expander("Open to Edit / Update Holdings, Cash, Backups, and Details", expanded=False):
         st.caption("Viewing mode stays protected while this is closed. Open only when you want to edit holdings, deploy cash, update cash/contributions, view detailed tables, or use backup/restore tools.")

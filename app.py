@@ -1885,11 +1885,17 @@ def inject_dashboard_css() -> None:
         .planner-kicker { color:#93c5fd !important; font-weight:900; font-size:.76rem; letter-spacing:.14em; text-transform:uppercase; }
         .planner-title { color:#fff !important; font-size:1.72rem; font-weight:950; letter-spacing:-.04em; margin-top:5px; }
         .planner-subtitle { color:#cbd5e1 !important; font-size:.95rem; font-weight:600; margin-top:5px; line-height:1.4; }
-        .planner-buy { display:flex; justify-content:space-between; align-items:center; gap:18px; padding:14px 16px; margin:9px 0; border-radius:17px; background:rgba(255,255,255,.96); border:1px solid rgba(255,255,255,.7); box-shadow:0 8px 20px rgba(15,23,42,.12); }
+        .planner-buy { display:flex; justify-content:space-between; align-items:center; gap:18px; padding:14px 16px; margin:9px 0; border-radius:17px; border:1px solid rgba(15,23,42,.10); box-shadow:0 8px 20px rgba(15,23,42,.10); }
+        .planner-buy.blue { background:linear-gradient(135deg,#eff6ff 0%,#dbeafe 100%); border-color:#bfdbfe; }
+        .planner-buy.purple { background:linear-gradient(135deg,#faf5ff 0%,#f3e8ff 100%); border-color:#e9d5ff; }
+        .planner-buy.amber { background:linear-gradient(135deg,#fffbeb 0%,#fef3c7 100%); border-color:#fde68a; }
+        .planner-buy.green { background:linear-gradient(135deg,#f0fdf4 0%,#dcfce7 100%); border-color:#bbf7d0; }
+        .planner-buy.rose { background:linear-gradient(135deg,#fff1f2 0%,#ffe4e6 100%); border-color:#fecdd3; }
+        .planner-buy.cyan { background:linear-gradient(135deg,#ecfeff 0%,#cffafe 100%); border-color:#a5f3fc; }
         .planner-rank { color:#64748b !important; font-size:.78rem; font-weight:900; text-transform:uppercase; letter-spacing:.08em; }
         .planner-ticker { color:#0f172a !important; font-size:1.16rem; font-weight:950; letter-spacing:-.02em; }
         .planner-detail { color:#64748b !important; font-size:.82rem; font-weight:650; margin-top:2px; }
-        .planner-amount { color:#047857 !important; font-size:1.40rem; font-weight:1000; letter-spacing:-.025em; white-space:nowrap; }
+        .planner-amount { color:#047857 !important; font-size:1.28rem; font-weight:950; white-space:nowrap; }
         .planner-total { color:#1e3a8a !important; font-weight:900; font-size:.92rem; margin-top:12px; padding:12px 14px; border-radius:14px; background:#eff6ff; border:1px solid #bfdbfe; }
         </style>
         """,
@@ -2365,14 +2371,14 @@ def render_distribution_buy_planner(calc: dict) -> None:
     automatic_excess = max(0.0, round_money(cash - CASH_RESERVE_FLOOR))
 
     st.markdown(
-        '<div class="planner-shell"><div class="planner-kicker">Smart allocation tool</div><div class="planner-title">Distribution Buy Planner</div><div class="planner-subtitle">Enter the amount available to invest. The app divides it among the holdings furthest below the master allocation, without changing anything automatically.</div></div>',
+        '<div class="planner-shell"><div class="planner-kicker">Smart allocation tool</div><div class="planner-title">Allocation Recommendations</div><div class="planner-subtitle">Enter the amount available above your cash reserve. The app recommends how to allocate new money to move the portfolio closer to its target allocation. No trades are made automatically.</div></div>',
         unsafe_allow_html=True,
     )
 
     summary_cols = st.columns(3)
     summary_cols[0].metric("FDRXX Cash", format_dollars(cash))
-    summary_cols[1].metric("Reserve Reference", format_dollars(CASH_RESERVE_FLOOR))
-    summary_cols[2].metric("Cash Above Reserve", format_dollars(automatic_excess))
+    summary_cols[1].metric("Protected Cash Reserve", format_dollars(CASH_RESERVE_FLOOR))
+    summary_cols[2].metric("Available to Invest", format_dollars(automatic_excess))
 
     # Keep the planner synchronized with the current cash balance.
     # A manual edit remains in place until the cash balance itself changes.
@@ -2399,22 +2405,29 @@ def render_distribution_buy_planner(calc: dict) -> None:
         st.success("All eligible holdings are at or above their relative targets for this amount.")
         return
 
-    st.markdown("#### Suggested Purchases")
-    for _, row in plan.iterrows():
-        card = (
-            f'<div class="planner-buy"><div><div class="planner-rank">Priority {int(row["priority"])}</div>'
-            f'<div class="planner-ticker">{row["ticker"]}</div>'
-            f'<div class="planner-detail">Current mix {row["current_mix"]:.2%} &nbsp;&#8226;&nbsp; Target mix {row["normalized_target"]:.2%}</div></div>'
-            f'<div class="planner-amount">{format_dollars(row["suggested_buy"])}</div></div>'
-        )
-        st.markdown(card, unsafe_allow_html=True)
-
     planned_total = round_money(float(plan["suggested_buy"].sum()))
-    st.markdown(
-        f'<div class="planner-total">Total suggested purchases: {format_dollars(planned_total)} &nbsp;&bull;&nbsp; {len(plan)} holdings below target</div>',
-        unsafe_allow_html=True,
+    expander_title = (
+        f"Allocation Recommendations - {format_dollars(planned_total)} "
+        f"across {len(plan)} holdings"
     )
-    st.caption("Master targets: SPYI 16, DIVO 13, QQQI 10, FEPI 8, SVOL 6, CHPY 5, GDXY 5, AIPI 4, TLTW 4, IYRI 3, PFFA 2, IWMI 2, MLPI 2, IAU 2. They are normalized across invested holdings because cash is managed as a fixed dollar reserve.")
+    with st.expander(expander_title, expanded=False):
+        card_tones = ["blue", "purple", "amber", "green", "rose", "cyan"]
+        for card_index, (_, row) in enumerate(plan.iterrows()):
+            card_tone = card_tones[card_index % len(card_tones)]
+            card = (
+                f'<div class="planner-buy {card_tone}"><div><div class="planner-rank">Priority {int(row["priority"])}</div>'
+                f'<div class="planner-ticker">{row["ticker"]}</div>'
+                f'<div class="planner-detail">Current mix {row["current_mix"]:.2%} &nbsp;&bull;&nbsp; Target mix {row["normalized_target"]:.2%}</div></div>'
+                f'<div class="planner-amount">{format_dollars(row["suggested_buy"])}</div></div>'
+            )
+            st.markdown(card, unsafe_allow_html=True)
+
+        st.markdown(
+            f'<div class="planner-total">Total recommended allocation: {format_dollars(planned_total)} '
+            f'&nbsp;&bull;&nbsp; {len(plan)} holdings below target</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption("Master targets: SPYI 16, DIVO 13, QQQI 10, FEPI 8, SVOL 6, CHPY 5, GDXY 5, AIPI 4, TLTW 4, IYRI 3, PFFA 2, IWMI 2, MLPI 2, IAU 2. They are normalized across invested holdings because cash is managed as a fixed dollar reserve.")
 
 
 def render_holdings_editor() -> None:

@@ -2374,11 +2374,17 @@ def render_distribution_buy_planner(calc: dict) -> None:
     summary_cols[1].metric("Reserve Reference", format_dollars(CASH_RESERVE_FLOOR))
     summary_cols[2].metric("Cash Above Reserve", format_dollars(automatic_excess))
 
+    # Keep the planner synchronized with the current cash balance.
+    # A manual edit remains in place until the cash balance itself changes.
+    planner_cash_signature = (cash, CASH_RESERVE_FLOOR)
+    if st.session_state.get("distribution_planner_cash_signature") != planner_cash_signature:
+        st.session_state["distribution_planner_amount"] = float(automatic_excess)
+        st.session_state["distribution_planner_cash_signature"] = planner_cash_signature
+
     amount_to_invest = st.number_input(
         "Amount available for suggested purchases",
         min_value=0.0,
-        max_value=max(cash, 0.0),
-        value=float(automatic_excess),
+        max_value=float(automatic_excess),
         step=100.0,
         format="%.2f",
         key="distribution_planner_amount",

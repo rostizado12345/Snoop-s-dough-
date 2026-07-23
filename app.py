@@ -2399,22 +2399,25 @@ def render_distribution_buy_planner(calc: dict) -> None:
         st.success("All eligible holdings are at or above their relative targets for this amount.")
         return
 
-    st.markdown("#### Suggested Purchases")
-    for _, row in plan.iterrows():
-        card = (
-            f'<div class="planner-buy"><div><div class="planner-rank">Priority {int(row["priority"])}</div>'
-            f'<div class="planner-ticker">{row["ticker"]}</div>'
-            f'<div class="planner-detail">Current mix {row["current_mix"]:.2%} &nbsp;â¢&nbsp; Target mix {row["normalized_target"]:.2%}</div></div>'
-            f'<div class="planner-amount">{format_dollars(row["suggested_buy"])}</div></div>'
-        )
-        st.markdown(card, unsafe_allow_html=True)
-
     planned_total = round_money(float(plan["suggested_buy"].sum()))
-    st.markdown(
-        f'<div class="planner-total">â Total suggested purchases: {format_dollars(planned_total)} &nbsp;â¢&nbsp; {len(plan)} holdings below target</div>',
-        unsafe_allow_html=True,
-    )
-    st.caption("Master targets: SPYI 16, DIVO 13, QQQI 10, FEPI 8, SVOL 6, CHPY 5, GDXY 5, AIPI 4, TLTW 4, IYRI 3, PFFA 2, IWMI 2, MLPI 2, IAU 2. They are normalized across invested holdings because cash is managed as a fixed dollar reserve.")
+    with st.expander(
+        f"Suggested Purchases â {format_dollars(planned_total)} across {len(plan)} holdings",
+        expanded=False,
+    ):
+        for _, row in plan.iterrows():
+            card = (
+                f'<div class="planner-buy"><div><div class="planner-rank">Priority {int(row["priority"])}</div>'
+                f'<div class="planner-ticker">{row["ticker"]}</div>'
+                f'<div class="planner-detail">Current mix {row["current_mix"]:.2%} &nbsp;&#8226;&nbsp; Target mix {row["normalized_target"]:.2%}</div></div>'
+                f'<div class="planner-amount">{format_dollars(row["suggested_buy"])}</div></div>'
+            )
+            st.markdown(card, unsafe_allow_html=True)
+
+        st.markdown(
+            f'<div class="planner-total">â Total suggested purchases: {format_dollars(planned_total)} &nbsp;&#8226;&nbsp; {len(plan)} holdings below target</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption("Master targets: SPYI 16, DIVO 13, QQQI 10, FEPI 8, SVOL 6, CHPY 5, GDXY 5, AIPI 4, TLTW 4, IYRI 3, PFFA 2, IWMI 2, MLPI 2, IAU 2. They are normalized across invested holdings because cash is managed as a fixed dollar reserve.")
 
 
 def render_holdings_editor() -> None:

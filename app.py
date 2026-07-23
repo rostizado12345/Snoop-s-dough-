@@ -1885,17 +1885,11 @@ def inject_dashboard_css() -> None:
         .planner-kicker { color:#93c5fd !important; font-weight:900; font-size:.76rem; letter-spacing:.14em; text-transform:uppercase; }
         .planner-title { color:#fff !important; font-size:1.72rem; font-weight:950; letter-spacing:-.04em; margin-top:5px; }
         .planner-subtitle { color:#cbd5e1 !important; font-size:.95rem; font-weight:600; margin-top:5px; line-height:1.4; }
-        .planner-buy { display:flex; justify-content:space-between; align-items:center; gap:18px; padding:14px 16px; margin:9px 0; border-radius:17px; border:1px solid rgba(148,163,184,.20); box-shadow:0 8px 20px rgba(15,23,42,.10); }
-        .planner-buy.card-1 { background:linear-gradient(135deg,#eefbf5 0%,#f8fffc 100%); border-left:5px solid #34d399; }
-        .planner-buy.card-2 { background:linear-gradient(135deg,#eef6ff 0%,#f9fcff 100%); border-left:5px solid #60a5fa; }
-        .planner-buy.card-3 { background:linear-gradient(135deg,#f5f1ff 0%,#fcfaff 100%); border-left:5px solid #a78bfa; }
-        .planner-buy.card-4 { background:linear-gradient(135deg,#fff7ed 0%,#fffdfa 100%); border-left:5px solid #fb923c; }
-        .planner-buy.card-5 { background:linear-gradient(135deg,#fff1f5 0%,#fffafd 100%); border-left:5px solid #f472b6; }
-        .planner-buy.card-6 { background:linear-gradient(135deg,#f0fdfa 0%,#f8fffd 100%); border-left:5px solid #2dd4bf; }
+        .planner-buy { display:flex; justify-content:space-between; align-items:center; gap:18px; padding:14px 16px; margin:9px 0; border-radius:17px; background:rgba(255,255,255,.96); border:1px solid rgba(255,255,255,.7); box-shadow:0 8px 20px rgba(15,23,42,.12); }
         .planner-rank { color:#64748b !important; font-size:.78rem; font-weight:900; text-transform:uppercase; letter-spacing:.08em; }
         .planner-ticker { color:#0f172a !important; font-size:1.16rem; font-weight:950; letter-spacing:-.02em; }
         .planner-detail { color:#64748b !important; font-size:.82rem; font-weight:650; margin-top:2px; }
-        .planner-amount { color:#047857 !important; font-size:1.28rem; font-weight:950; white-space:nowrap; }
+        .planner-amount { color:#047857 !important; font-size:1.40rem; font-weight:1000; letter-spacing:-.025em; white-space:nowrap; }
         .planner-total { color:#1e3a8a !important; font-weight:900; font-size:.92rem; margin-top:12px; padding:12px 14px; border-radius:14px; background:#eff6ff; border:1px solid #bfdbfe; }
         </style>
         """,
@@ -2370,78 +2364,57 @@ def render_distribution_buy_planner(calc: dict) -> None:
     cash = round_money(st.session_state.cash_fdrxx)
     automatic_excess = max(0.0, round_money(cash - CASH_RESERVE_FLOOR))
 
-    expander_title = (
-        f"Allocation Recommendations â "
-        f"{format_dollars(automatic_excess)} Available"
+    st.markdown(
+        '<div class="planner-shell"><div class="planner-kicker">Smart allocation tool</div><div class="planner-title">Distribution Buy Planner</div><div class="planner-subtitle">Enter the amount available to invest. The app divides it among the holdings furthest below the master allocation, without changing anything automatically.</div></div>',
+        unsafe_allow_html=True,
     )
 
-    with st.expander(expander_title, expanded=False):
-        st.markdown(
-            '<div class="planner-shell"><div class="planner-kicker">Smart allocation tool</div>'
-            '<div class="planner-subtitle">Enter the amount available above your cash reserve. '
-            'The app recommends how to allocate new money to move the portfolio closer to its '
-            'target allocation. No trades are made automatically.</div></div>',
-            unsafe_allow_html=True,
+    summary_cols = st.columns(3)
+    summary_cols[0].metric("FDRXX Cash", format_dollars(cash))
+    summary_cols[1].metric("Reserve Reference", format_dollars(CASH_RESERVE_FLOOR))
+    summary_cols[2].metric("Cash Above Reserve", format_dollars(automatic_excess))
+
+    # Keep the planner synchronized with the current cash balance.
+    # A manual edit remains in place until the cash balance itself changes.
+    planner_cash_signature = (cash, CASH_RESERVE_FLOOR)
+    if st.session_state.get("distribution_planner_cash_signature") != planner_cash_signature:
+        st.session_state["distribution_planner_amount"] = float(automatic_excess)
+        st.session_state["distribution_planner_cash_signature"] = planner_cash_signature
+
+    amount_to_invest = st.number_input(
+        "Amount available for suggested purchases",
+        min_value=0.0,
+        max_value=float(automatic_excess),
+        step=100.0,
+        format="%.2f",
+        key="distribution_planner_amount",
+        help="Planning only. Nothing is bought or saved automatically.",
+    )
+
+    plan = build_distribution_buy_plan(calc["df"], float(amount_to_invest))
+    if amount_to_invest <= 0:
+        st.info("No excess amount is available right now. As distributions rebuild cash above the reserve, recommendations will appear automatically.")
+        return
+    if plan.empty:
+        st.success("All eligible holdings are at or above their relative targets for this amount.")
+        return
+
+    st.markdown("#### Suggested Purchases")
+    for _, row in plan.iterrows():
+        card = (
+            f'<div class="planner-buy"><div><div class="planner-rank">Priority {int(row["priority"])}</div>'
+            f'<div class="planner-ticker">{row["ticker"]}</div>'
+            f'<div class="planner-detail">Current mix {row["current_mix"]:.2%} &nbsp;&#8226;&nbsp; Target mix {row["normalized_target"]:.2%}</div></div>'
+            f'<div class="planner-amount">{format_dollars(row["suggested_buy"])}</div></div>'
         )
+        st.markdown(card, unsafe_allow_html=True)
 
-        summary_cols = st.columns(3)
-        summary_cols[0].metric("FDRXX Cash", format_dollars(cash))
-        summary_cols[1].metric("Protected Cash Reserve", format_dollars(CASH_RESERVE_FLOOR))
-        summary_cols[2].metric("Available to Invest", format_dollars(automatic_excess))
-
-        # Keep the planner synchronized with the current cash balance.
-        # A manual edit remains in place until the cash balance itself changes.
-        planner_cash_signature = (cash, CASH_RESERVE_FLOOR)
-        if st.session_state.get("distribution_planner_cash_signature") != planner_cash_signature:
-            st.session_state["distribution_planner_amount"] = float(automatic_excess)
-            st.session_state["distribution_planner_cash_signature"] = planner_cash_signature
-
-        amount_to_invest = st.number_input(
-            "Amount available for suggested purchases",
-            min_value=0.0,
-            max_value=float(automatic_excess),
-            step=100.0,
-            format="%.2f",
-            key="distribution_planner_amount",
-            help="Planning only. Nothing is bought or saved automatically.",
-        )
-
-        plan = build_distribution_buy_plan(calc["df"], float(amount_to_invest))
-        if amount_to_invest <= 0:
-            st.info(
-                "No excess amount is available right now. As distributions rebuild cash "
-                "above the reserve, recommendations will appear automatically."
-            )
-            return
-
-        if plan.empty:
-            st.success("All eligible holdings are at or above their relative targets for this amount.")
-            return
-
-        for _, row in plan.iterrows():
-            card_color = ((int(row["priority"]) - 1) % 6) + 1
-            card = (
-                f'<div class="planner-buy card-{card_color}"><div><div class="planner-rank">Priority {int(row["priority"])}</div>'
-                f'<div class="planner-ticker">{row["ticker"]}</div>'
-                f'<div class="planner-detail">Current mix {row["current_mix"]:.2%} '
-                f'&nbsp;&bull;&nbsp; Target mix {row["normalized_target"]:.2%}</div></div>'
-                f'<div class="planner-amount">{format_dollars(row["suggested_buy"])}</div></div>'
-            )
-            st.markdown(card, unsafe_allow_html=True)
-
-        planned_total = round_money(float(plan["suggested_buy"].sum()))
-        st.markdown(
-            f'<div class="planner-total">Total recommended allocation: '
-            f'{format_dollars(planned_total)} &nbsp;&bull;&nbsp; '
-            f'{len(plan)} holdings below target</div>',
-            unsafe_allow_html=True,
-        )
-        st.caption(
-            "Master targets: SPYI 16, DIVO 13, QQQI 10, FEPI 8, SVOL 6, CHPY 5, "
-            "GDXY 5, AIPI 4, TLTW 4, IYRI 3, PFFA 2, IWMI 2, MLPI 2, IAU 2. "
-            "They are normalized across invested holdings because cash is managed "
-            "as a fixed dollar reserve."
-        )
+    planned_total = round_money(float(plan["suggested_buy"].sum()))
+    st.markdown(
+        f'<div class="planner-total">Total suggested purchases: {format_dollars(planned_total)} &nbsp;&bull;&nbsp; {len(plan)} holdings below target</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption("Master targets: SPYI 16, DIVO 13, QQQI 10, FEPI 8, SVOL 6, CHPY 5, GDXY 5, AIPI 4, TLTW 4, IYRI 3, PFFA 2, IWMI 2, MLPI 2, IAU 2. They are normalized across invested holdings because cash is managed as a fixed dollar reserve.")
 
 
 def render_holdings_editor() -> None:

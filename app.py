@@ -1885,7 +1885,13 @@ def inject_dashboard_css() -> None:
         .planner-kicker { color:#93c5fd !important; font-weight:900; font-size:.76rem; letter-spacing:.14em; text-transform:uppercase; }
         .planner-title { color:#fff !important; font-size:1.72rem; font-weight:950; letter-spacing:-.04em; margin-top:5px; }
         .planner-subtitle { color:#cbd5e1 !important; font-size:.95rem; font-weight:600; margin-top:5px; line-height:1.4; }
-        .planner-buy { display:flex; justify-content:space-between; align-items:center; gap:18px; padding:14px 16px; margin:9px 0; border-radius:17px; background:rgba(255,255,255,.96); border:1px solid rgba(255,255,255,.7); box-shadow:0 8px 20px rgba(15,23,42,.12); }
+        .planner-buy { display:flex; justify-content:space-between; align-items:center; gap:18px; padding:14px 16px; margin:9px 0; border-radius:17px; border:1px solid rgba(148,163,184,.20); box-shadow:0 8px 20px rgba(15,23,42,.10); }
+        .planner-buy.card-1 { background:linear-gradient(135deg,#eefbf5 0%,#f8fffc 100%); border-left:5px solid #34d399; }
+        .planner-buy.card-2 { background:linear-gradient(135deg,#eef6ff 0%,#f9fcff 100%); border-left:5px solid #60a5fa; }
+        .planner-buy.card-3 { background:linear-gradient(135deg,#f5f1ff 0%,#fcfaff 100%); border-left:5px solid #a78bfa; }
+        .planner-buy.card-4 { background:linear-gradient(135deg,#fff7ed 0%,#fffdfa 100%); border-left:5px solid #fb923c; }
+        .planner-buy.card-5 { background:linear-gradient(135deg,#fff1f5 0%,#fffafd 100%); border-left:5px solid #f472b6; }
+        .planner-buy.card-6 { background:linear-gradient(135deg,#f0fdfa 0%,#f8fffd 100%); border-left:5px solid #2dd4bf; }
         .planner-rank { color:#64748b !important; font-size:.78rem; font-weight:900; text-transform:uppercase; letter-spacing:.08em; }
         .planner-ticker { color:#0f172a !important; font-size:1.16rem; font-weight:950; letter-spacing:-.02em; }
         .planner-detail { color:#64748b !important; font-size:.82rem; font-weight:650; margin-top:2px; }
@@ -2413,8 +2419,9 @@ def render_distribution_buy_planner(calc: dict) -> None:
             return
 
         for _, row in plan.iterrows():
+            card_color = ((int(row["priority"]) - 1) % 6) + 1
             card = (
-                f'<div class="planner-buy"><div><div class="planner-rank">Priority {int(row["priority"])}</div>'
+                f'<div class="planner-buy card-{card_color}"><div><div class="planner-rank">Priority {int(row["priority"])}</div>'
                 f'<div class="planner-ticker">{row["ticker"]}</div>'
                 f'<div class="planner-detail">Current mix {row["current_mix"]:.2%} '
                 f'&nbsp;&bull;&nbsp; Target mix {row["normalized_target"]:.2%}</div></div>'

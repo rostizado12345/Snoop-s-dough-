@@ -2370,64 +2370,60 @@ def render_distribution_buy_planner(calc: dict) -> None:
     cash = round_money(st.session_state.cash_fdrxx)
     automatic_excess = max(0.0, round_money(cash - CASH_RESERVE_FLOOR))
 
-    st.markdown(
-        '<div class="planner-shell"><div class="planner-kicker">Smart allocation tool</div><div class="planner-title">Allocation Recommendations</div><div class="planner-subtitle">Enter the amount available above your cash reserve. The app recommends how to allocate new money to move the portfolio closer to its target allocation. No trades are made automatically.</div></div>',
-        unsafe_allow_html=True,
-    )
-
-    summary_cols = st.columns(3)
-    summary_cols[0].metric("FDRXX Cash", format_dollars(cash))
-    summary_cols[1].metric("Protected Cash Reserve", format_dollars(CASH_RESERVE_FLOOR))
-    summary_cols[2].metric("Available to Invest", format_dollars(automatic_excess))
-
-    # Keep the planner synchronized with the current cash balance.
-    # A manual edit remains in place until the cash balance itself changes.
-    planner_cash_signature = (cash, CASH_RESERVE_FLOOR)
-    if st.session_state.get("distribution_planner_cash_signature") != planner_cash_signature:
-        st.session_state["distribution_planner_amount"] = float(automatic_excess)
-        st.session_state["distribution_planner_cash_signature"] = planner_cash_signature
-
-    amount_to_invest = st.number_input(
-        "Amount available for suggested purchases",
-        min_value=0.0,
-        max_value=float(automatic_excess),
-        step=100.0,
-        format="%.2f",
-        key="distribution_planner_amount",
-        help="Planning only. Nothing is bought or saved automatically.",
-    )
-
-    plan = build_distribution_buy_plan(calc["df"], float(amount_to_invest))
-    if amount_to_invest <= 0:
-        st.info("No excess amount is available right now. As distributions rebuild cash above the reserve, recommendations will appear automatically.")
-        return
-    if plan.empty:
-        st.success("All eligible holdings are at or above their relative targets for this amount.")
-        return
-
-    planned_total = round_money(float(plan["suggested_buy"].sum()))
-    expander_title = (
-        f"Allocation Recommendations - {format_dollars(planned_total)} "
-        f"across {len(plan)} holdings"
-    )
+    # ONE collapsible controls the entire allocation-recommendation section.
+    # Nothing from this section is rendered outside this expander.
+    expander_title = f"Allocation Recommendation â {format_dollars(automatic_excess)} available"
     with st.expander(expander_title, expanded=False):
-        card_tones = ["blue", "purple", "amber", "green", "rose", "cyan"]
-        for card_index, (_, row) in enumerate(plan.iterrows()):
-            card_tone = card_tones[card_index % len(card_tones)]
-            card = (
-                f'<div class="planner-buy {card_tone}"><div><div class="planner-rank">Priority {int(row["priority"])}</div>'
-                f'<div class="planner-ticker">{row["ticker"]}</div>'
-                f'<div class="planner-detail">Current mix {row["current_mix"]:.2%} &nbsp;&bull;&nbsp; Target mix {row["normalized_target"]:.2%}</div></div>'
-                f'<div class="planner-amount">{format_dollars(row["suggested_buy"])}</div></div>'
-            )
-            st.markdown(card, unsafe_allow_html=True)
-
         st.markdown(
-            f'<div class="planner-total">Total recommended allocation: {format_dollars(planned_total)} '
-            f'&nbsp;&bull;&nbsp; {len(plan)} holdings below target</div>',
+            '<div class="planner-shell"><div class="planner-kicker">Smart allocation tool</div><div class="planner-title">Allocation Recommendations</div><div class="planner-subtitle">Enter the amount available above your cash reserve. The app recommends how to allocate new money to move the portfolio closer to its target allocation. No trades are made automatically.</div></div>',
             unsafe_allow_html=True,
         )
-        st.caption("Master targets: SPYI 16, DIVO 13, QQQI 10, FEPI 8, SVOL 6, CHPY 5, GDXY 5, AIPI 4, TLTW 4, IYRI 3, PFFA 2, IWMI 2, MLPI 2, IAU 2. They are normalized across invested holdings because cash is managed as a fixed dollar reserve.")
+
+        summary_cols = st.columns(3)
+        summary_cols[0].metric("FDRXX Cash", format_dollars(cash))
+        summary_cols[1].metric("Protected Cash Reserve", format_dollars(CASH_RESERVE_FLOOR))
+        summary_cols[2].metric("Cash Above Reserve", format_dollars(automatic_excess))
+
+        planner_cash_signature = (cash, CASH_RESERVE_FLOOR)
+        if st.session_state.get("distribution_planner_cash_signature") != planner_cash_signature:
+            st.session_state["distribution_planner_amount"] = float(automatic_excess)
+            st.session_state["distribution_planner_cash_signature"] = planner_cash_signature
+
+        amount_to_invest = st.number_input(
+            "Amount available for suggested purchases",
+            min_value=0.0,
+            max_value=float(automatic_excess),
+            step=100.0,
+            format="%.2f",
+            key="distribution_planner_amount",
+            help="Planning only. Nothing is bought or saved automatically.",
+        )
+
+        plan = build_distribution_buy_plan(calc["df"], float(amount_to_invest))
+        if amount_to_invest <= 0:
+            st.info("No excess amount is available right now. As distributions rebuild cash above the reserve, recommendations will appear automatically.")
+        elif plan.empty:
+            st.success("All eligible holdings are at or above their relative targets for this amount.")
+        else:
+            st.markdown("### Suggested Purchases")
+            planned_total = round_money(float(plan["suggested_buy"].sum()))
+            card_tones = ["blue", "purple", "amber", "green", "rose", "cyan"]
+            for card_index, (_, row) in enumerate(plan.iterrows()):
+                card_tone = card_tones[card_index % len(card_tones)]
+                card = (
+                    f'<div class="planner-buy {card_tone}"><div><div class="planner-rank">Priority {int(row["priority"])}</div>'
+                    f'<div class="planner-ticker">{row["ticker"]}</div>'
+                    f'<div class="planner-detail">Current mix {row["current_mix"]:.2%} &nbsp;&bull;&nbsp; Target mix {row["normalized_target"]:.2%}</div></div>'
+                    f'<div class="planner-amount">{format_dollars(row["suggested_buy"])}</div></div>'
+                )
+                st.markdown(card, unsafe_allow_html=True)
+
+            st.markdown(
+                f'<div class="planner-total">Total recommended allocation: {format_dollars(planned_total)} '
+                f'&nbsp;&bull;&nbsp; {len(plan)} holdings below target</div>',
+                unsafe_allow_html=True,
+            )
+            st.caption("Master targets: SPYI 16, DIVO 13, QQQI 10, FEPI 8, SVOL 6, CHPY 5, GDXY 5, AIPI 4, TLTW 4, IYRI 3, PFFA 2, IWMI 2, MLPI 2, IAU 2. They are normalized across invested holdings because cash is managed as a fixed dollar reserve.")
 
 
 def render_holdings_editor() -> None:

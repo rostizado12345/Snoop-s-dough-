@@ -33,20 +33,21 @@ CONSERVATIVE_INCOME_FACTOR = 0.632
 # portfolio targets; the planner normalizes them across invested holdings so the
 # fixed cash reserve can remain a dollar amount instead of a forced percentage.
 MASTER_TARGET_WEIGHTS = {
-    "SPYI": 16.0,
-    "DIVO": 13.0,
-    "QQQI": 10.0,
-    "FEPI": 8.0,
-    "SVOL": 6.0,
-    "CHPY": 5.0,
-    "GDXY": 5.0,
-    "AIPI": 4.0,
-    "TLTW": 4.0,
-    "IYRI": 3.0,
-    "PFFA": 2.0,
-    "IWMI": 2.0,
-    "MLPI": 2.0,
-    "IAU": 2.0,
+    # Full-precision invested-holdings targets. User-facing displays round to 1 decimal.
+    "SPYI": 19.51219512195122,
+    "DIVO": 15.853658536585366,
+    "QQQI": 12.195121951219512,
+    "FEPI": 9.75609756097561,
+    "SVOL": 7.317073170731708,
+    "CHPY": 6.097560975609756,
+    "GDXY": 6.097560975609756,
+    "AIPI": 4.878048780487805,
+    "TLTW": 4.878048780487805,
+    "IYRI": 3.658536585365854,
+    "PFFA": 2.4390243902439024,
+    "IWMI": 2.4390243902439024,
+    "MLPI": 2.4390243902439024,
+    "IAU": 2.4390243902439024,
 }
 CASH_RESERVE_FLOOR = 150000.0
 
@@ -2465,10 +2466,11 @@ def render_distribution_buy_planner(calc: dict) -> None:
             unsafe_allow_html=True,
         )
         st.caption(
-            "Master targets: SPYI 16, DIVO 13, QQQI 10, FEPI 8, SVOL 6, CHPY 5, "
-            "GDXY 5, AIPI 4, TLTW 4, IYRI 3, PFFA 2, IWMI 2, MLPI 2, IAU 2. "
-            "They are normalized across invested holdings because cash is managed "
-            "as a fixed dollar reserve."
+            "Invested-holdings targets: SPYI 19.5%, DIVO 15.9%, QQQI 12.2%, "
+            "FEPI 9.8%, SVOL 7.3%, CHPY 6.1%, GDXY 6.1%, AIPI 4.9%, "
+            "TLTW 4.9%, IYRI 3.7%, PFFA 2.4%, IWMI 2.4%, MLPI 2.4%, IAU 2.4%. "
+            "The app keeps full precision internally and displays one decimal place. "
+            "Cash remains a separate fixed-dollar reserve."
         )
 
 
